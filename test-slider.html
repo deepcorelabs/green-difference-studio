@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="node_modules/nouislider/dist/nouislider.css">
+  <style>
+    body { background: #333; padding: 50px; }
+    .noUi-connect { background: red !important; }
+  </style>
+</head>
+<body>
+  <div id="slider"></div>
+  <script type="module">
+    import noUiSlider from "./node_modules/nouislider/dist/nouislider.mjs";
+    noUiSlider.create(document.getElementById('slider'), {
+      start: [20, 80],
+      connect: true,
+      range: { min: 0, max: 100 }
+    });
+  </script>
+</body>
+</html>

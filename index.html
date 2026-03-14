@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Green Difference Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700&family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <div class="app">
+
+      <header class="topbar">
+        <h1>Green Difference Studio</h1>
+        <div class="topbar-right">
+          <span id="video-name" class="topbar-file"></span>
+          <button id="export-webm-button" class="btn" disabled>Export WebM</button>
+          <button id="export-alpha-button" class="btn" disabled>Export Alpha WebM</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <div class="stage">
+          <label class="viewer" id="source-drop-zone" for="video-input">
+            <input id="video-input" type="file" accept="video/*" hidden />
+            <span class="viewer-label">Original</span>
+            <div class="viewer-wrap">
+              <canvas id="source-canvas" class="viewer-canvas"></canvas>
+            </div>
+            <div id="drop-hint" class="drop-hint">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              <strong>Drop video here</strong>
+              <span>or click to browse</span>
+            </div>
+          </label>
+
+          <div class="viewer" id="processed-viewer">
+            <span class="viewer-label">Processed</span>
+            <div class="viewer-wrap">
+              <canvas id="processed-canvas" class="viewer-canvas"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <aside class="sidebar">
+          <button id="process-button" class="btn btn-process" disabled>Process All Frames</button>
+
+          <div class="ctrl-section">
+            <p class="ctrl-heading">Key Refinement</p>
+
+            <div class="ctrl-row">
+              <label>Threshold</label>
+              <output id="threshold-output">0.100 &ndash; 0.200</output>
+            </div>
+            <div id="threshold-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Spill Suppression</label>
+              <output id="spill-output">0.120</output>
+            </div>
+            <div id="spill-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Despill Lift</label>
+              <output id="despill-output">0.080</output>
+            </div>
+            <div id="despill-slider" class="slider-mount"></div>
+          </div>
+
+          <div class="status-strip">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">Waiting for source media.</span>
+          </div>
+
+          <div class="progress-section">
+            <div class="progress-row">
+              <div><span class="meta-label">Buffered</span><strong id="buffered-frames">0</strong></div>
+              <div><span class="meta-label">Progress</span><strong id="processing-progress">0%</strong></div>
+            </div>
+            <div class="meter"><div id="processing-fill" class="meter-fill"></div></div>
+          </div>
+
+          <div class="ctrl-section">
+            <p class="ctrl-heading">Background</p>
+            <div class="bg-options">
+              <button class="bg-btn active" data-bg="dark-checker" title="Dark Checker">
+                <span class="bg-swatch swatch-dark-checker"></span>
+              </button>
+              <button class="bg-btn" data-bg="light-checker" title="Light Checker">
+                <span class="bg-swatch swatch-light-checker"></span>
+              </button>
+              <button class="bg-btn" data-bg="black" title="Black">
+                <span class="bg-swatch swatch-black"></span>
+              </button>
+              <button class="bg-btn" data-bg="white" title="White">
+                <span class="bg-swatch swatch-white"></span>
+              </button>
+              <button class="bg-btn" data-bg="custom" title="Custom Color">
+                <span class="bg-swatch swatch-custom" id="custom-swatch"></span>
+              </button>
+              <div id="color-picker-mount" class="color-picker-mount" hidden></div>
+            </div>
+          </div>
+
+          <div class="export-info">
+            <p class="meta-label">Export Support</p>
+            <p id="export-support"></p>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="bottombar">
+        <div class="timeline-container" id="timeline-container">
+          <canvas id="timeline-thumbs" class="timeline-thumbs"></canvas>
+          <div class="timeline-played" id="timeline-played"></div>
+          <div class="timeline-playhead" id="timeline-playhead">
+            <svg class="playhead-arrow" viewBox="0 0 14 9" width="14" height="9"><polygon points="0,0 14,0 7,9"/></svg>
+            <div class="playhead-line"></div>
+          </div>
+        </div>
+        <div class="transport">
+          <button id="step-backward" class="tbtn" disabled title="Previous frame">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+          </button>
+          <button id="play-toggle" class="tbtn tbtn-play" disabled title="Play / Pause">
+            <svg id="play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+            <svg id="pause-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          </button>
+          <button id="step-forward" class="tbtn" disabled title="Next frame">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+
+          <div class="transport-time">
+            <span id="current-time" class="time-code">--:--</span>
+            <span class="time-sep">/</span>
+            <span id="total-time" class="time-code">--:--</span>
+          </div>
+
+          <span id="meta-info" class="transport-meta"></span>
+
+          <div class="transport-spacer"></div>
+
+          <div class="speed-group">
+            <button class="speed-btn" data-speed="0.25">0.25x</button>
+            <button class="speed-btn" data-speed="0.5">0.5x</button>
+            <button class="speed-btn active" data-speed="1">1x</button>
+            <button class="speed-btn" data-speed="2">2x</button>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <div id="busy-overlay" class="busy-overlay" hidden>
+      <div class="busy-card">
+        <div class="spinner"></div>
+        <strong id="busy-title">Processing...</strong>
+        <span id="busy-detail">Please be patient.</span>
+      </div>
+    </div>
+
+    <video id="source-video" crossorigin="anonymous" playsinline muted hidden></video>
+  </body>
+</html>
