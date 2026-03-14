@@ -63,6 +63,14 @@ const el = {
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
 const renderer = new ChromaKeyRenderer({ processedCanvas: el.processedCanvas });
 const exportSupport = detectExportSupport();
+const BACKGROUND_CLASSES = [
+  "processed-bg-dark-checker",
+  "processed-bg-light-checker",
+  "processed-bg-gray",
+  "processed-bg-black",
+  "processed-bg-white",
+  "processed-bg-custom",
+];
 
 const state = {
   sourceUrl: null,
@@ -602,20 +610,22 @@ colorPicker.on("color:change", (color) => {
 
 function setProcessedBackground(mode) {
   const v = el.processedViewer;
-  v.className = "viewer";
-  v.style.removeProperty("--custom-bg");
+  v.classList.remove(...BACKGROUND_CLASSES);
+  v.removeAttribute("style");
 
-  switch (mode) {
-    case "dark-checker": v.classList.add("processed-bg-dark-checker"); break;
-    case "light-checker": v.classList.add("processed-bg-light-checker"); break;
-    case "gray": v.classList.add("processed-bg-gray"); break;
-    case "black": v.classList.add("processed-bg-black"); break;
-    case "white": v.classList.add("processed-bg-white"); break;
-    case "custom":
-      v.classList.add("processed-bg-custom");
-      v.style.setProperty("--custom-bg", customColor);
-      break;
-  }
+  setTimeout(() => {
+    switch (mode) {
+      case "dark-checker": v.classList.add("processed-bg-dark-checker"); break;
+      case "light-checker": v.classList.add("processed-bg-light-checker"); break;
+      case "gray": v.classList.add("processed-bg-gray"); break;
+      case "black": v.classList.add("processed-bg-black"); break;
+      case "white": v.classList.add("processed-bg-white"); break;
+      case "custom":
+        v.classList.add("processed-bg-custom");
+        v.style.setProperty("--custom-bg", customColor);
+        break;
+    }
+  }, 1);
 
   document.querySelectorAll(".bg-btn").forEach((b) => b.classList.toggle("active", b.dataset.bg === mode));
 }
