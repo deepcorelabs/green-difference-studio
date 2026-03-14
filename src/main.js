@@ -39,11 +39,11 @@ const el = {
   statusDot: document.querySelector("#status-dot"),
   statusText: document.querySelector("#status-text"),
   processingFill: document.querySelector("#processing-fill"),
-  bufferedFrames: document.querySelector("#buffered-frames"),
-  processingProgress: document.querySelector("#processing-progress"),
+  processStatusText: document.querySelector("#process-status-text"),
   exportSupport: document.querySelector("#export-support"),
   timelineContainer: document.querySelector("#timeline-container"),
   timelineThumbs: document.querySelector("#timeline-thumbs"),
+  timelineBuffer: document.querySelector("#timeline-buffer"),
   timelinePlayed: document.querySelector("#timeline-played"),
   timelinePlayhead: document.querySelector("#timeline-playhead"),
   thresholdOutput: document.querySelector("#threshold-output"),
@@ -54,7 +54,10 @@ const el = {
   busyDetail: document.querySelector("#busy-detail"),
   processedViewer: document.querySelector("#processed-viewer"),
   colorPickerMount: document.querySelector("#color-picker-mount"),
+  colorPickerPopover: document.querySelector("#color-picker-popover"),
   customSwatch: document.querySelector("#custom-swatch"),
+  wrapExportWebm: document.querySelector("#wrap-export-webm"),
+  wrapExportAlpha: document.querySelector("#wrap-export-alpha"),
 };
 
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
@@ -71,6 +74,7 @@ const state = {
   frameCount: 0,
   playing: false,
   processing: false,
+  abortProcessing: false,
   exporting: false,
   bufferedFrames: [],
   rafId: 0,
@@ -174,12 +178,17 @@ function updateButtons() {
   const hasVideo = Boolean(state.sourceUrl);
   const hasBuffer = state.bufferedFrames.length > 0;
 
-  el.processButton.disabled = !hasVideo || busy();
+  el.processButton.textContent = state.processing ? "Cancel" : "Process Frames";
+  el.processButton.disabled = !hasVideo || state.exporting;
+
   el.playToggle.disabled = !hasVideo || busy();
   el.stepBackward.disabled = !hasVideo || busy();
   el.stepForward.disabled = !hasVideo || busy();
   el.exportWebmButton.disabled = !hasBuffer || busy() || !exportSupport.color.supported;
   el.exportAlphaButton.disabled = !hasBuffer || busy() || !exportSupport.alpha.supported;
+
+  el.wrapExportWebm.title = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+  el.wrapExportAlpha.title = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
 
   el.playIcon.hidden = state.playing;
   el.pauseIcon.hidden = !state.playing;
@@ -187,11 +196,10 @@ function updateButtons() {
   el.sourceDropZone.classList.toggle("has-video", hasVideo);
 }
 
-function updateProgress(progress, total = state.frameCount) {
+function updateProgress(progress, total = state.frameCount, current = state.bufferedFrames.length) {
   const pct = Math.round(progress * 100);
   el.processingFill.style.width = `${pct}%`;
-  el.processingProgress.textContent = `${pct}%`;
-  el.bufferedFrames.textContent = `${state.bufferedFrames.length}${total ? ` / ${total}` : ""}`;
+  el.processStatusText.textContent = total > 0 ? `${current} / ${total} frames` : `0 / 0 frames`;
 }
 
 function updateExportUI() {
@@ -290,6 +298,24 @@ async function generateThumbnails() {
     } catch { /* skip */ }
   }
   await seekVideo(0);
+  drawBufferTimeline();
+}
+
+function drawBufferTimeline() {
+  const canvas = el.timelineBuffer;
+  const rect = el.timelineContainer.getBoundingClientRect();
+  canvas.width = Math.round(rect.width);
+  canvas.height = 3;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!state.duration || !state.bufferedFrames.length) return;
+
+  ctx.fillStyle = "rgba(114, 255, 159, 0.8)";
+  for (const frame of state.bufferedFrames) {
+    const x = (frame.time / state.duration) * canvas.width;
+    ctx.fillRect(x - 0.5, 0, 1.5, 3);
+  }
 }
 
 // ── Seek ──
@@ -385,7 +411,8 @@ document.querySelectorAll(".speed-btn").forEach((btn) => {
 function resetBuffer() {
   state.bufferedFrames.forEach((f) => f.bitmap.close?.());
   state.bufferedFrames = [];
-  updateProgress(0, state.frameCount);
+  updateProgress(0, state.frameCount, 0);
+  drawBufferTimeline();
   updateButtons();
 }
 
@@ -447,6 +474,7 @@ async function processVideo() {
   await pausePlayback();
   resetBuffer();
   state.processing = true;
+  state.abortProcessing = false;
   updateButtons();
   showBusy("Processing Frames", "Please be patient...");
   setStatus("Processing...", true);
@@ -454,19 +482,27 @@ async function processVideo() {
 
   try {
     for (let i = 0; i < total; i++) {
+      if (state.abortProcessing) {
+        setStatus("Processing cancelled.");
+        break;
+      }
       const time = Math.min(frameToTime(i, state.fps), Math.max(0, state.duration - 0.001));
       await seekVideo(time);
       drawSourceFrame();
       renderer.renderPreview();
       const bitmap = await renderer.captureFrame({ alpha: true });
       state.bufferedFrames.push({ time, bitmap });
-      updateProgress((i + 1) / total, total);
+      updateProgress((i + 1) / total, total, i + 1);
       el.busyDetail.textContent = `Frame ${i + 1} / ${total} (${Math.round(((i + 1) / total) * 100)}%)`;
-      if (i % 8 === 0) await new Promise((r) => setTimeout(r, 0));
+      if (i % 8 === 0) {
+        drawBufferTimeline();
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
-    setStatus("Processing complete. Ready for export.");
+    drawBufferTimeline();
+    if (!state.abortProcessing) setStatus("Processing complete. Ready for export.");
   } catch (e) { console.error(e); setStatus(e.message || "Processing failed."); }
-  finally { state.processing = false; hideBusy(); updateButtons(); drawCurrentFrame(); }
+  finally { state.processing = false; state.abortProcessing = false; hideBusy(); updateButtons(); drawCurrentFrame(); }
 }
 
 // ── Export ──
@@ -510,23 +546,48 @@ el.sourceDropZone.addEventListener("drop", (e) => { e.preventDefault(); el.sourc
 el.playToggle.addEventListener("click", togglePlayback);
 el.stepBackward.addEventListener("click", () => stepFrame(-1));
 el.stepForward.addEventListener("click", () => stepFrame(1));
-el.processButton.addEventListener("click", processVideo);
+el.processButton.addEventListener("click", () => {
+  if (state.processing) {
+    state.abortProcessing = true;
+  } else {
+    processVideo();
+  }
+});
 el.exportWebmButton.addEventListener("click", () => exportVideo({ alpha: false }));
 el.exportAlphaButton.addEventListener("click", () => exportVideo({ alpha: true }));
 el.sourceVideo.addEventListener("ended", () => { pausePlayback().then(() => drawCurrentFrame()).catch(console.error); });
+
+window.addEventListener("keydown", (e) => {
+  const tag = document.activeElement?.tagName?.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || document.activeElement?.classList.contains('noUi-handle')) return;
+
+  if (e.code === "Space") {
+    e.preventDefault();
+    togglePlayback();
+  } else if (e.code === "ArrowLeft") {
+    e.preventDefault();
+    stepFrame(e.shiftKey ? -10 : -1);
+  } else if (e.code === "ArrowRight") {
+    e.preventDefault();
+    stepFrame(e.shiftKey ? 10 : 1);
+  } else if (e.code === "Escape") {
+    if (state.processing) state.abortProcessing = true;
+  }
+});
 
 // ── Background ──
 
 let customColor = "#e04080";
 
 const colorPicker = new iro.ColorPicker(el.colorPickerMount, {
-  width: 80,
+  width: 160,
   color: customColor,
   borderWidth: 1,
   borderColor: "rgba(255,255,255,0.1)",
-  layoutDirection: "horizontal",
+  layoutDirection: "vertical",
   layout: [
-    { component: iro.ui.Slider, options: { sliderType: "hue", sliderShape: "bar" } },
+    { component: iro.ui.Wheel, options: { wheelLightness: false } },
+    { component: iro.ui.Slider, options: { sliderType: "value" } },
   ],
 });
 
@@ -543,16 +604,16 @@ function setProcessedBackground(mode) {
   const v = el.processedViewer;
   v.className = "viewer";
   v.style.removeProperty("--custom-bg");
-  el.colorPickerMount.hidden = true;
 
   switch (mode) {
     case "dark-checker": v.classList.add("processed-bg-dark-checker"); break;
     case "light-checker": v.classList.add("processed-bg-light-checker"); break;
+    case "gray": v.classList.add("processed-bg-gray"); break;
     case "black": v.classList.add("processed-bg-black"); break;
     case "white": v.classList.add("processed-bg-white"); break;
     case "custom":
+      v.classList.add("processed-bg-custom");
       v.style.setProperty("--custom-bg", customColor);
-      el.colorPickerMount.hidden = false;
       break;
   }
 
@@ -560,7 +621,15 @@ function setProcessedBackground(mode) {
 }
 
 document.querySelectorAll(".bg-btn").forEach((btn) => {
-  btn.addEventListener("click", () => setProcessedBackground(btn.dataset.bg));
+  btn.addEventListener("click", () => {
+    setProcessedBackground(btn.dataset.bg);
+    if (btn.dataset.bg === "custom") {
+      const rect = btn.getBoundingClientRect();
+      el.colorPickerPopover.style.top = `${rect.bottom + 8}px`;
+      el.colorPickerPopover.style.left = `${rect.right - 184}px`; // 160 width + 24 padding
+      el.colorPickerPopover.showPopover();
+    }
+  });
 });
 
 setProcessedBackground("dark-checker");

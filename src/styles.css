@@ -90,6 +90,15 @@ html, body {
 .btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+  pointer-events: none;
+}
+
+.tooltip-wrap {
+  display: inline-flex;
+}
+
+.tooltip-wrap[title] {
+  cursor: help;
 }
 
 .btn-process {
@@ -165,10 +174,11 @@ html, body {
     repeating-conic-gradient(#d0d0d0 0% 25%, #f0f0f0 0% 50%) 0 0 / 20px 20px;
 }
 
+.processed-bg-gray .viewer-canvas { background: #808080; }
 .processed-bg-black .viewer-canvas { background: #000; }
 .processed-bg-white .viewer-canvas { background: #fff; }
 
-.viewer[style*="--custom-bg"] .viewer-canvas {
+.processed-bg-custom .viewer-canvas {
   background: var(--custom-bg, #e04080);
 }
 
@@ -341,18 +351,24 @@ label.viewer.drag-active {
   background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 10px 10px;
 }
 
+.swatch-gray { background: #808080; border: 1px solid rgba(255,255,255,0.1); }
 .swatch-black { background: #000; border: 1px solid rgba(255,255,255,0.1); }
 .swatch-white { background: #fff; }
 .swatch-custom { background: #e04080; }
 
-.color-picker-mount {
-  display: flex;
-  align-items: center;
-  margin-left: 4px;
-  flex: 1;
+#color-picker-popover {
+  margin: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+  color: var(--text);
 }
 
-.color-picker-mount[hidden] { display: none; }
+#color-picker-popover::backdrop {
+  background: transparent;
+}
 
 /* ── Status / Progress ── */
 
@@ -476,6 +492,17 @@ label.viewer.drag-active {
   opacity: 0.6;
 }
 
+.timeline-buffer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.8;
+}
+
 .timeline-played {
   position: absolute;
   inset: 0;
@@ -572,6 +599,44 @@ label.viewer.drag-active {
 }
 
 .transport-spacer { flex: 1; }
+
+.process-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  padding: 3px 4px 3px 10px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+}
+
+.process-status {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.process-meter {
+  width: 60px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.process-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
+.btn-process {
+  padding: 4px 12px;
+  margin: 0;
+  width: auto;
+}
 
 .speed-group {
   display: flex;
