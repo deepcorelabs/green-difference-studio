@@ -16,10 +16,10 @@
         <h1>Green Difference Studio</h1>
         <div class="topbar-right">
           <span id="video-name" class="topbar-file"></span>
-          <div class="tooltip-wrap" id="wrap-export-webm" title="Process frames first to enable export.">
+          <div class="tooltip-wrap" id="wrap-export-webm" data-tip="Process frames first to enable export.">
             <button id="export-webm-button" class="btn" disabled>Export WebM</button>
           </div>
-          <div class="tooltip-wrap" id="wrap-export-alpha" title="Process frames first to enable export.">
+          <div class="tooltip-wrap" id="wrap-export-alpha" data-tip="Process frames first to enable export.">
             <button id="export-alpha-button" class="btn" disabled>Export Alpha WebM</button>
           </div>
         </div>
@@ -135,6 +135,13 @@
             <span id="total-time" class="time-code">--:--</span>
           </div>
 
+          <div class="speed-group">
+            <button class="speed-btn" data-speed="0.25">0.25x</button>
+            <button class="speed-btn" data-speed="0.5">0.5x</button>
+            <button class="speed-btn active" data-speed="1">1x</button>
+            <button class="speed-btn" data-speed="2">2x</button>
+          </div>
+
           <span id="meta-info" class="transport-meta"></span>
 
           <div class="transport-spacer"></div>
@@ -143,13 +150,6 @@
             <span class="process-status" id="process-status-text">0 / 0 frames</span>
             <div class="process-meter"><div id="processing-fill" class="process-meter-fill"></div></div>
             <button id="process-button" class="btn btn-process" disabled>Process Frames</button>
-          </div>
-
-          <div class="speed-group">
-            <button class="speed-btn" data-speed="0.25">0.25x</button>
-            <button class="speed-btn" data-speed="0.5">0.5x</button>
-            <button class="speed-btn active" data-speed="1">1x</button>
-            <button class="speed-btn" data-speed="2">2x</button>
           </div>
         </div>
       </footer>

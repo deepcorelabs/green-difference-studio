@@ -102,7 +102,7 @@ const thresholdSlider = noUiSlider.create(document.querySelector("#threshold-sli
 const spillSlider = noUiSlider.create(document.querySelector("#spill-slider"), {
   start: [0.12],
   connect: [true, false],
-  range: { min: 0, max: 1 },
+  range: { min: 0, max: 2 },
   step: 0.001,
 });
 
@@ -195,8 +195,8 @@ function updateButtons() {
   el.exportWebmButton.disabled = !hasBuffer || busy() || !exportSupport.color.supported;
   el.exportAlphaButton.disabled = !hasBuffer || busy() || !exportSupport.alpha.supported;
 
-  el.wrapExportWebm.title = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
-  el.wrapExportAlpha.title = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+  el.wrapExportWebm.dataset.tip = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+  el.wrapExportAlpha.dataset.tip = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
 
   el.playIcon.hidden = state.playing;
   el.pauseIcon.hidden = !state.playing;
