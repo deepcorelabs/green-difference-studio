@@ -8,7 +8,6 @@ import { ChromaKeyRenderer } from "./shaderPipeline.js";
 import {
   clamp,
   estimateFrameCount,
-  findBufferedFrame,
   formatTime,
   frameToTime,
   timeToFrame,
@@ -25,8 +24,7 @@ const el = {
   exportWebmButton: document.querySelector("#export-webm-button"),
   exportAlphaButton: document.querySelector("#export-alpha-button"),
   playToggle: document.querySelector("#play-toggle"),
-  playIcon: document.querySelector("#play-icon"),
-  pauseIcon: document.querySelector("#pause-icon"),
+  playTogglePath: document.querySelector("#play-toggle-path"),
   stepBackward: document.querySelector("#step-backward"),
   stepForward: document.querySelector("#step-forward"),
   sourceCanvas: document.querySelector("#source-canvas"),
@@ -49,6 +47,8 @@ const el = {
   thresholdOutput: document.querySelector("#threshold-output"),
   spillOutput: document.querySelector("#spill-output"),
   despillOutput: document.querySelector("#despill-output"),
+  chokeOutput: document.querySelector("#choke-output"),
+  featherOutput: document.querySelector("#feather-output"),
   busyOverlay: document.querySelector("#busy-overlay"),
   busyTitle: document.querySelector("#busy-title"),
   busyDetail: document.querySelector("#busy-detail"),
@@ -58,6 +58,11 @@ const el = {
   customSwatch: document.querySelector("#custom-swatch"),
   wrapExportWebm: document.querySelector("#wrap-export-webm"),
   wrapExportAlpha: document.querySelector("#wrap-export-alpha"),
+  sampleHelp: document.querySelector("#sample-help"),
+  sampleSwatches: document.querySelector("#sample-swatches"),
+  pickSampleButton: document.querySelector("#pick-sample-button"),
+  sampleSimilarityGroup: document.querySelector("#sample-similarity-group"),
+  sampleSimilarityOutput: document.querySelector("#sample-similarity-output"),
 };
 
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
@@ -88,6 +93,12 @@ const state = {
   rafId: 0,
   scrubbing: false,
   playbackRate: 1,
+  viewMode: "composite",
+  restoreViewMode: "composite",
+  keyMode: "auto",
+  samplingActive: false,
+  sampleSimilarity: 0.1,
+  sampledColors: [],
 };
 
 // ── noUiSlider ──
@@ -113,6 +124,27 @@ const despillSlider = noUiSlider.create(document.querySelector("#despill-slider"
   step: 0.001,
 });
 
+const chokeSlider = noUiSlider.create(document.querySelector("#choke-slider"), {
+  start: [0],
+  connect: [true, false],
+  range: { min: -2, max: 2 },
+  step: 0.001,
+});
+
+const featherSlider = noUiSlider.create(document.querySelector("#feather-slider"), {
+  start: [0],
+  connect: [true, false],
+  range: { min: 0, max: 8 },
+  step: 0.05,
+});
+
+const sampleSimilaritySlider = noUiSlider.create(document.querySelector("#sample-similarity-slider"), {
+  start: [0.1],
+  connect: [true, false],
+  range: { min: 0, max: 0.5 },
+  step: 0.001,
+});
+
 function getSettings() {
   const [low, high] = thresholdSlider.get(true);
   return {
@@ -120,6 +152,12 @@ function getSettings() {
     thresholdHigh: high,
     spillSuppression: spillSlider.get(true),
     despillLift: despillSlider.get(true),
+    choke: chokeSlider.get(true),
+    feather: featherSlider.get(true),
+    viewMode: state.viewMode === "alpha" ? 1 : state.viewMode === "source" ? 2 : 0,
+    useSampledKey: state.keyMode === "sampled" && state.sampledColors.length > 0,
+    sampleSimilarity: state.sampleSimilarity,
+    keyColors: state.sampledColors.map((color) => [color.r / 255, color.g / 255, color.b / 255]),
   };
 }
 
@@ -128,9 +166,21 @@ function syncOutputs() {
   el.thresholdOutput.textContent = `${s.thresholdLow.toFixed(3)} \u2013 ${s.thresholdHigh.toFixed(3)}`;
   el.spillOutput.textContent = s.spillSuppression.toFixed(3);
   el.despillOutput.textContent = s.despillLift.toFixed(3);
+  el.chokeOutput.textContent = s.choke.toFixed(3);
+  el.featherOutput.textContent = s.feather.toFixed(2);
+  el.sampleSimilarityOutput.textContent = `${(s.sampleSimilarity * 100).toFixed(1)}%`;
 }
 
-function applySettings() {
+function invalidateBuffer(reason) {
+  if (!state.bufferedFrames.length || state.processing || state.exporting) return;
+  resetBuffer();
+  setStatus(reason ?? "Settings changed. Reprocess to export.");
+}
+
+function applySettings({ invalidate = true } = {}) {
+  if (invalidate) {
+    invalidateBuffer("Key settings changed. Reprocess to export.");
+  }
   syncOutputs();
   renderer.updateSettings(getSettings());
   drawCurrentFrame();
@@ -139,6 +189,12 @@ function applySettings() {
 thresholdSlider.on("update", applySettings);
 spillSlider.on("update", applySettings);
 despillSlider.on("update", applySettings);
+chokeSlider.on("update", applySettings);
+featherSlider.on("update", applySettings);
+sampleSimilaritySlider.on("update", (values) => {
+  state.sampleSimilarity = Number(values[0]);
+  applySettings();
+});
 
 // ── Helpers ──
 
@@ -198,8 +254,10 @@ function updateButtons() {
   el.wrapExportWebm.dataset.tip = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
   el.wrapExportAlpha.dataset.tip = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
 
-  el.playIcon.hidden = state.playing;
-  el.pauseIcon.hidden = !state.playing;
+  el.playTogglePath.setAttribute(
+    "d",
+    state.playing ? "M7 5H10V19H7V5ZM14 5H17V19H14V5Z" : "M8 5.5V18.5L18 12L8 5.5Z",
+  );
 
   el.sourceDropZone.classList.toggle("has-video", hasVideo);
 }
@@ -215,6 +273,53 @@ function updateExportUI() {
   parts.push(exportSupport.color.supported ? `Color: ${exportSupport.color.mimeType}` : "Color WebM: unavailable");
   parts.push(exportSupport.alpha.supported ? "Alpha: available" : "Alpha: unavailable");
   el.exportSupport.textContent = parts.join(" \u00b7 ");
+}
+
+function renderSampleSwatches() {
+  if (!state.sampledColors.length) {
+    el.sampleSwatches.innerHTML = '<span class="sample-empty">No sampled colors yet.</span>';
+  } else {
+    el.sampleSwatches.innerHTML = state.sampledColors
+      .map(
+        (color, index) =>
+          `<button class="sample-swatch" data-sample-index="${index}" title="Remove sample ${index + 1}">
+            <span class="sample-chip" style="background:${color.hex}"></span>
+            <span>${index + 1}</span>
+          </button>`,
+      )
+      .join("");
+  }
+
+  el.sampleHelp.textContent =
+    state.keyMode === "sampled"
+      ? (state.samplingActive
+        ? "Crosshair armed. Click the source viewer once to capture a color."
+        : "Use Pick Color to arm the crosshair. Click a swatch to remove it.")
+      : "Sample mode disabled. Switch to Use Samples to pick colors from the source viewer.";
+
+  const canSample = state.keyMode === "sampled" && Boolean(state.sourceUrl) && state.sampledColors.length < 5;
+  el.sampleSimilarityGroup.hidden = state.keyMode !== "sampled";
+  el.pickSampleButton.disabled = !canSample;
+  el.pickSampleButton.textContent = state.samplingActive ? "Cancel Pick" : "Pick Color";
+  el.pickSampleButton.classList.toggle("active", state.samplingActive);
+  el.sourceDropZone.classList.toggle("sample-mode", state.samplingActive && canSample);
+}
+
+function setViewMode(mode) {
+  state.viewMode = mode;
+  document.querySelectorAll("[data-view-mode]").forEach((btn) => btn.classList.toggle("active", btn.dataset.viewMode === mode));
+  renderer.updateSettings(getSettings());
+  drawCurrentFrame();
+}
+
+function setKeyMode(mode) {
+  state.keyMode = mode;
+  state.samplingActive = false;
+  document.querySelectorAll("[data-key-mode]").forEach((btn) => btn.classList.toggle("active", btn.dataset.keyMode === mode));
+  invalidateBuffer("Key mode changed. Reprocess to export.");
+  renderSampleSwatches();
+  renderer.updateSettings(getSettings());
+  drawCurrentFrame();
 }
 
 // ── Timeline ──
@@ -299,7 +404,10 @@ async function generateThumbnails() {
   const count = Math.max(1, Math.ceil(totalW / thumbW));
 
   for (let i = 0; i < count; i++) {
-    const time = Math.min((i / count) * state.duration, state.duration - 0.01);
+    const baseTime = (i / count) * state.duration;
+    const time = i === 0
+      ? Math.min(Math.max(1 / Math.max(state.fps, 1) * 0.1, 0.001), Math.max(0, state.duration - 0.01))
+      : Math.min(baseTime, state.duration - 0.01);
     try {
       await seekVideo(time);
       ctx.drawImage(el.sourceVideo, Math.round(i * thumbW), 0, thumbW, thumbH);
@@ -350,19 +458,10 @@ function drawSourceFrame() {
   sourceCtx.drawImage(el.sourceVideo, 0, 0, state.width, state.height);
 }
 
-function drawBufferedPreview(t) {
-  const f = findBufferedFrame(state.bufferedFrames, t, state.fps);
-  if (!f) { renderer.renderPreview(); return; }
-  const ctx = el.processedCanvas.getContext("2d", { alpha: true });
-  ctx.clearRect(0, 0, state.width, state.height);
-  ctx.drawImage(f.bitmap, 0, 0, state.width, state.height);
-}
-
 function drawCurrentFrame() {
   if (!state.sourceUrl) return;
   drawSourceFrame();
-  if (!state.playing && state.bufferedFrames.length) drawBufferedPreview(el.sourceVideo.currentTime);
-  else renderer.renderPreview();
+  renderer.renderPreview();
   updateTimeline(el.sourceVideo.currentTime);
 }
 
@@ -439,6 +538,10 @@ async function inferFps() {
 async function loadVideo(file) {
   await pausePlayback();
   resetBuffer();
+  state.sampledColors = [];
+  state.keyMode = "auto";
+  state.samplingActive = false;
+  state.viewMode = "composite";
   if (state.sourceUrl) { URL.revokeObjectURL(state.sourceUrl); state.sourceUrl = null; }
 
   state.sourceName = file.name;
@@ -465,6 +568,9 @@ async function loadVideo(file) {
   setStatus("Generating thumbnails...", true);
   await generateThumbnails();
   await seekVideo(0);
+  renderSampleSwatches();
+  setKeyMode("auto");
+  setViewMode("composite");
   drawCurrentFrame();
   updateButtons();
   setStatus("Ready.");
@@ -473,6 +579,28 @@ async function loadVideo(file) {
 async function handleFile(file) {
   if (!file) return;
   try { await loadVideo(file); } catch (e) { console.error(e); setStatus(e.message || "Load failed."); }
+}
+
+function sampleColorFromSourceEvent(event) {
+  if (!state.sourceUrl || state.keyMode !== "sampled" || !state.samplingActive) return;
+  const rect = el.sourceCanvas.getBoundingClientRect();
+  const x = clamp((event.clientX - rect.left) / rect.width, 0, 1) * state.width;
+  const y = clamp((event.clientY - rect.top) / rect.height, 0, 1) * state.height;
+  drawSourceFrame();
+  const pixel = sourceCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
+  const color = {
+    r: pixel[0],
+    g: pixel[1],
+    b: pixel[2],
+    hex: `#${[pixel[0], pixel[1], pixel[2]].map((value) => value.toString(16).padStart(2, "0")).join("")}`,
+  };
+
+  state.sampledColors = [...state.sampledColors.slice(-4), color];
+  state.samplingActive = false;
+  renderSampleSwatches();
+  invalidateBuffer("Sampled colors changed. Reprocess to export.");
+  renderer.updateSettings(getSettings());
+  drawCurrentFrame();
 }
 
 // ── Process ──
@@ -497,8 +625,8 @@ async function processVideo() {
       const time = Math.min(frameToTime(i, state.fps), Math.max(0, state.duration - 0.001));
       await seekVideo(time);
       drawSourceFrame();
-      renderer.renderPreview();
-      const bitmap = await renderer.captureFrame({ alpha: true });
+      renderer.renderPreview({ viewModeOverride: 0 });
+      const bitmap = await renderer.captureFrame({ alpha: true, viewModeOverride: 0 });
       state.bufferedFrames.push({ time, bitmap });
       updateProgress((i + 1) / total, total, i + 1);
       el.busyDetail.textContent = `Frame ${i + 1} / ${total} (${Math.round(((i + 1) / total) * 100)}%)`;
@@ -551,6 +679,12 @@ el.videoInput.addEventListener("change", (e) => { handleFile(e.target.files?.[0]
 ["dragenter", "dragover"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.add("drag-active"); }));
 ["dragleave", "dragend"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); }));
 el.sourceDropZone.addEventListener("drop", (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); handleFile(e.dataTransfer?.files?.[0]); });
+el.sourceDropZone.addEventListener("click", (e) => {
+  if (state.keyMode !== "sampled" || !state.sourceUrl || !state.samplingActive) return;
+  e.preventDefault();
+  e.stopPropagation();
+  sampleColorFromSourceEvent(e);
+});
 el.playToggle.addEventListener("click", togglePlayback);
 el.stepBackward.addEventListener("click", () => stepFrame(-1));
 el.stepForward.addEventListener("click", () => stepFrame(1));
@@ -564,6 +698,52 @@ el.processButton.addEventListener("click", () => {
 el.exportWebmButton.addEventListener("click", () => exportVideo({ alpha: false }));
 el.exportAlphaButton.addEventListener("click", () => exportVideo({ alpha: true }));
 el.sourceVideo.addEventListener("ended", () => { pausePlayback().then(() => drawCurrentFrame()).catch(console.error); });
+document.querySelectorAll("[data-view-mode]").forEach((btn) => {
+  if (btn.dataset.viewMode === "source") {
+    const activateSourcePreview = (event) => {
+      event.preventDefault();
+      state.restoreViewMode = state.viewMode === "source" ? "composite" : state.viewMode;
+      setViewMode("source");
+    };
+    const deactivateSourcePreview = () => {
+      if (state.viewMode === "source") {
+        setViewMode(state.restoreViewMode || "composite");
+      }
+    };
+
+    btn.addEventListener("mousedown", activateSourcePreview);
+    btn.addEventListener("touchstart", activateSourcePreview, { passive: false });
+    btn.addEventListener("mouseup", deactivateSourcePreview);
+    btn.addEventListener("mouseleave", deactivateSourcePreview);
+    btn.addEventListener("touchend", deactivateSourcePreview);
+    btn.addEventListener("touchcancel", deactivateSourcePreview);
+    window.addEventListener("mouseup", deactivateSourcePreview);
+    window.addEventListener("touchend", deactivateSourcePreview);
+  } else {
+    btn.addEventListener("click", () => {
+      state.restoreViewMode = btn.dataset.viewMode;
+      setViewMode(btn.dataset.viewMode);
+    });
+  }
+});
+document.querySelectorAll("[data-key-mode]").forEach((btn) => btn.addEventListener("click", () => setKeyMode(btn.dataset.keyMode)));
+el.pickSampleButton.addEventListener("click", () => {
+  if (state.keyMode !== "sampled" || !state.sourceUrl || state.sampledColors.length >= 5) return;
+  state.samplingActive = !state.samplingActive;
+  renderSampleSwatches();
+});
+el.sampleSwatches.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-sample-index]");
+  if (!button) return;
+  const index = Number(button.dataset.sampleIndex);
+  if (!Number.isInteger(index)) return;
+  state.sampledColors.splice(index, 1);
+  state.sampledColors = [...state.sampledColors];
+  renderSampleSwatches();
+  invalidateBuffer("Sampled colors changed. Reprocess to export.");
+  renderer.updateSettings(getSettings());
+  drawCurrentFrame();
+});
 
 window.addEventListener("keydown", (e) => {
   const tag = document.activeElement?.tagName?.toLowerCase();
@@ -643,6 +823,9 @@ document.querySelectorAll(".bg-btn").forEach((btn) => {
 });
 
 setProcessedBackground("dark-checker");
+renderSampleSwatches();
+setViewMode("composite");
+setKeyMode("auto");
 
 // ── Init ──
 

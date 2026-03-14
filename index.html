@@ -29,7 +29,9 @@
         <div class="stage">
           <label class="viewer" id="source-drop-zone" for="video-input">
             <input id="video-input" type="file" accept="video/*" hidden />
-            <span class="viewer-label">Original</span>
+            <div class="viewer-head">
+              <span class="viewer-label">Original</span>
+            </div>
             <div class="viewer-wrap">
               <canvas id="source-canvas" class="viewer-canvas"></canvas>
             </div>
@@ -41,7 +43,14 @@
           </label>
 
           <div class="viewer" id="processed-viewer">
-            <span class="viewer-label">Processed</span>
+            <div class="viewer-head">
+              <span class="viewer-label">Processed</span>
+              <div class="viewer-tools" id="view-mode-group">
+                <button class="view-btn active" data-view-mode="composite">Composite</button>
+                <button class="view-btn" data-view-mode="alpha">Alpha</button>
+                <button class="view-btn view-btn-momentary" data-view-mode="source">Source</button>
+              </div>
+            </div>
             <div class="viewer-wrap">
               <canvas id="processed-canvas" class="viewer-canvas"></canvas>
             </div>
@@ -69,6 +78,36 @@
               <output id="despill-output">0.080</output>
             </div>
             <div id="despill-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Matte Choke</label>
+              <output id="choke-output">0.00</output>
+            </div>
+            <div id="choke-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Edge Feather</label>
+              <output id="feather-output">0.00</output>
+            </div>
+            <div id="feather-slider" class="slider-mount"></div>
+          </div>
+
+          <div class="ctrl-section">
+            <p class="ctrl-heading">Key Source</p>
+            <div class="mode-group" id="key-mode-group">
+              <button class="mode-btn active" data-key-mode="auto">Auto Green</button>
+              <button class="mode-btn" data-key-mode="sampled">Use Samples</button>
+            </div>
+            <button id="pick-sample-button" class="btn btn-pick-sample" disabled>Pick Color</button>
+            <div id="sample-similarity-group" hidden>
+              <div class="ctrl-row">
+                <label>Similarity</label>
+                <output id="sample-similarity-output">10.0%</output>
+              </div>
+              <div id="sample-similarity-slider" class="slider-mount"></div>
+            </div>
+            <p class="ctrl-help" id="sample-help">Sample mode disabled. Switch to Use Samples to pick colors from the source viewer.</p>
+            <div class="sample-swatches" id="sample-swatches"></div>
           </div>
 
           <div class="status-strip">
@@ -122,8 +161,9 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
           </button>
           <button id="play-toggle" class="tbtn tbtn-play" disabled title="Play / Pause (Space)">
-            <svg id="play-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-            <svg id="pause-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" hidden><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path id="play-toggle-path" d="M8 5.5V18.5L18 12L8 5.5Z"></path>
+            </svg>
           </button>
           <button id="step-forward" class="tbtn" disabled title="Next frame (Right Arrow)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
