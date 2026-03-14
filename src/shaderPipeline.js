@@ -191,16 +191,21 @@ export class ChromaKeyRenderer {
     this.exportCanvas = document.createElement("canvas");
     this.exportContext = this.exportCanvas.getContext("2d", { alpha: true });
     this.videoTexture = null;
+    this.imageTexture = null;
     this.video = null;
 
     this.setSize(this.size.width, this.size.height);
   }
 
+  _disposeTextures() {
+    if (this.videoTexture) { this.videoTexture.dispose(); this.videoTexture = null; }
+    if (this.imageTexture) { this.imageTexture.dispose(); this.imageTexture = null; }
+    this.uniforms.uTexture.value = null;
+  }
+
   setSource(video) {
+    this._disposeTextures();
     this.video = video;
-    if (this.videoTexture) {
-      this.videoTexture.dispose();
-    }
 
     this.videoTexture = new THREE.VideoTexture(video);
     this.videoTexture.colorSpace = THREE.SRGBColorSpace;
@@ -209,6 +214,20 @@ export class ChromaKeyRenderer {
     this.videoTexture.generateMipmaps = false;
 
     this.uniforms.uTexture.value = this.videoTexture;
+  }
+
+  setImageSource(img) {
+    this._disposeTextures();
+    this.video = null;
+
+    this.imageTexture = new THREE.Texture(img);
+    this.imageTexture.colorSpace = THREE.SRGBColorSpace;
+    this.imageTexture.minFilter = THREE.LinearFilter;
+    this.imageTexture.magFilter = THREE.LinearFilter;
+    this.imageTexture.generateMipmaps = false;
+    this.imageTexture.needsUpdate = true;
+
+    this.uniforms.uTexture.value = this.imageTexture;
   }
 
   setSize(width, height) {
@@ -242,16 +261,15 @@ export class ChromaKeyRenderer {
   }
 
   renderPreview({ viewModeOverride } = {}) {
-    if (!this.videoTexture) {
-      return;
-    }
+    const tex = this.uniforms.uTexture.value;
+    if (!tex) return;
 
     const previousViewMode = this.uniforms.uViewMode.value;
     if (typeof viewModeOverride === "number") {
       this.uniforms.uViewMode.value = viewModeOverride;
     }
 
-    this.videoTexture.needsUpdate = true;
+    tex.needsUpdate = true;
     this.renderer.render(this.scene, this.camera);
     this.processedContext.clearRect(0, 0, this.size.width, this.size.height);
     this.processedContext.drawImage(this.renderer.domElement, 0, 0, this.size.width, this.size.height);
@@ -260,16 +278,15 @@ export class ChromaKeyRenderer {
   }
 
   renderInto(canvas, { alphaBackground = false, viewModeOverride } = {}) {
-    if (!this.videoTexture) {
-      return;
-    }
+    const tex = this.uniforms.uTexture.value;
+    if (!tex) return;
 
     const context = canvas.getContext("2d", { alpha: true });
     const previousViewMode = this.uniforms.uViewMode.value;
     if (typeof viewModeOverride === "number") {
       this.uniforms.uViewMode.value = viewModeOverride;
     }
-    this.videoTexture.needsUpdate = true;
+    tex.needsUpdate = true;
     this.renderer.render(this.scene, this.camera);
     context.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -290,7 +307,7 @@ export class ChromaKeyRenderer {
   dispose() {
     this.mesh.geometry.dispose();
     this.material.dispose();
-    this.videoTexture?.dispose();
+    this._disposeTextures();
     this.renderer.dispose();
   }
 }

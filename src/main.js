@@ -17,12 +17,17 @@ const DEFAULT_FPS = 30;
 const SEEK_TIMEOUT_MS = 4000;
 
 const el = {
+  app: document.querySelector(".app"),
   videoInput: document.querySelector("#video-input"),
   sourceDropZone: document.querySelector("#source-drop-zone"),
   dropHint: document.querySelector("#drop-hint"),
   processButton: document.querySelector("#process-button"),
   exportWebmButton: document.querySelector("#export-webm-button"),
   exportAlphaButton: document.querySelector("#export-alpha-button"),
+  exportPngButton: document.querySelector("#export-png-button"),
+  exportAlphaPngButton: document.querySelector("#export-alpha-png-button"),
+  wrapExportPng: document.querySelector("#wrap-export-png"),
+  wrapExportAlphaPng: document.querySelector("#wrap-export-alpha-png"),
   playToggle: document.querySelector("#play-toggle"),
   playTogglePath: document.querySelector("#play-toggle-path"),
   stepBackward: document.querySelector("#step-backward"),
@@ -30,6 +35,7 @@ const el = {
   sourceCanvas: document.querySelector("#source-canvas"),
   processedCanvas: document.querySelector("#processed-canvas"),
   sourceVideo: document.querySelector("#source-video"),
+  sourceImage: document.querySelector("#source-image"),
   videoName: document.querySelector("#video-name"),
   metaInfo: document.querySelector("#meta-info"),
   currentTime: document.querySelector("#current-time"),
@@ -80,6 +86,7 @@ const BACKGROUND_CLASSES = [
 const state = {
   sourceUrl: null,
   sourceName: "",
+  isImage: false,
   width: 0,
   height: 0,
   duration: 0,
@@ -232,34 +239,52 @@ function updateMeta() {
     el.totalTime.textContent = "--:--";
     return;
   }
-  el.metaInfo.textContent = `${state.width}\u00d7${state.height}  ${state.fps.toFixed(1)}fps  ${state.frameCount}f`;
-  el.totalTime.textContent = formatTime(state.duration);
+  if (state.isImage) {
+    el.metaInfo.textContent = `${state.width}\u00d7${state.height}`;
+    el.currentTime.textContent = "";
+    el.totalTime.textContent = "";
+  } else {
+    el.metaInfo.textContent = `${state.width}\u00d7${state.height}  ${state.fps.toFixed(1)}fps  ${state.frameCount}f`;
+    el.totalTime.textContent = formatTime(state.duration);
+  }
 }
 
 const busy = () => state.processing || state.exporting;
 
 function updateButtons() {
-  const hasVideo = Boolean(state.sourceUrl);
+  const hasSource = Boolean(state.sourceUrl);
   const hasBuffer = state.bufferedFrames.length > 0;
 
-  el.processButton.textContent = state.processing ? "Cancel" : "Process Frames";
-  el.processButton.disabled = !hasVideo || state.exporting;
+  if (state.isImage) {
+    el.processButton.disabled = true;
+    el.playToggle.disabled = true;
+    el.stepBackward.disabled = true;
+    el.stepForward.disabled = true;
+    el.exportWebmButton.disabled = true;
+    el.exportAlphaButton.disabled = true;
+    el.exportPngButton.disabled = !hasSource;
+    el.exportAlphaPngButton.disabled = !hasSource;
+  } else {
+    el.processButton.textContent = state.processing ? "Cancel" : "Process Frames";
+    el.processButton.disabled = !hasSource || state.exporting;
+    el.playToggle.disabled = !hasSource || busy();
+    el.stepBackward.disabled = !hasSource || busy();
+    el.stepForward.disabled = !hasSource || busy();
+    el.exportWebmButton.disabled = !hasBuffer || busy() || !exportSupport.color.supported;
+    el.exportAlphaButton.disabled = !hasBuffer || busy() || !exportSupport.alpha.supported;
+    el.exportPngButton.disabled = true;
+    el.exportAlphaPngButton.disabled = true;
 
-  el.playToggle.disabled = !hasVideo || busy();
-  el.stepBackward.disabled = !hasVideo || busy();
-  el.stepForward.disabled = !hasVideo || busy();
-  el.exportWebmButton.disabled = !hasBuffer || busy() || !exportSupport.color.supported;
-  el.exportAlphaButton.disabled = !hasBuffer || busy() || !exportSupport.alpha.supported;
-
-  el.wrapExportWebm.dataset.tip = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
-  el.wrapExportAlpha.dataset.tip = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+    el.wrapExportWebm.dataset.tip = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+    el.wrapExportAlpha.dataset.tip = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+  }
 
   el.playTogglePath.setAttribute(
     "d",
     state.playing ? "M7 5H10V19H7V5ZM14 5H17V19H14V5Z" : "M8 5.5V18.5L18 12L8 5.5Z",
   );
 
-  el.sourceDropZone.classList.toggle("has-video", hasVideo);
+  el.sourceDropZone.classList.toggle("has-video", hasSource);
 }
 
 function updateProgress(progress, total = state.frameCount, current = state.bufferedFrames.length) {
@@ -320,6 +345,15 @@ function setKeyMode(mode) {
   renderSampleSwatches();
   renderer.updateSettings(getSettings());
   drawCurrentFrame();
+}
+
+function setImageMode(isImage) {
+  state.isImage = isImage;
+  el.app.classList.toggle("image-mode", isImage);
+  el.wrapExportPng.hidden = !isImage;
+  el.wrapExportAlphaPng.hidden = !isImage;
+  el.wrapExportWebm.hidden = isImage;
+  el.wrapExportAlpha.hidden = isImage;
 }
 
 // ── Timeline ──
@@ -455,14 +489,15 @@ async function seekVideo(seconds) {
 function drawSourceFrame() {
   if (!state.sourceUrl) return;
   sourceCtx.clearRect(0, 0, state.width, state.height);
-  sourceCtx.drawImage(el.sourceVideo, 0, 0, state.width, state.height);
+  const src = state.isImage ? el.sourceImage : el.sourceVideo;
+  sourceCtx.drawImage(src, 0, 0, state.width, state.height);
 }
 
 function drawCurrentFrame() {
   if (!state.sourceUrl) return;
   drawSourceFrame();
   renderer.renderPreview();
-  updateTimeline(el.sourceVideo.currentTime);
+  if (!state.isImage) updateTimeline(el.sourceVideo.currentTime);
 }
 
 // ── Playback ──
@@ -483,7 +518,7 @@ async function pausePlayback() {
 }
 
 async function togglePlayback() {
-  if (!state.sourceUrl || busy()) return;
+  if (!state.sourceUrl || state.isImage || busy()) return;
   if (state.playing) { await pausePlayback(); drawCurrentFrame(); return; }
   state.playing = true;
   el.sourceVideo.playbackRate = state.playbackRate;
@@ -493,7 +528,7 @@ async function togglePlayback() {
 }
 
 async function stepFrame(dir) {
-  if (!state.sourceUrl || busy()) return;
+  if (!state.sourceUrl || state.isImage || busy()) return;
   await pausePlayback();
   const cur = timeToFrame(el.sourceVideo.currentTime, state.fps);
   const tgt = clamp(cur + dir, 0, Math.max(0, state.frameCount - 1));
@@ -544,6 +579,9 @@ async function loadVideo(file) {
   state.viewMode = "composite";
   if (state.sourceUrl) { URL.revokeObjectURL(state.sourceUrl); state.sourceUrl = null; }
 
+  el.sourceImage.removeAttribute("src");
+  setImageMode(false);
+
   state.sourceName = file.name;
   state.sourceUrl = URL.createObjectURL(file);
   el.sourceVideo.src = state.sourceUrl;
@@ -576,9 +614,55 @@ async function loadVideo(file) {
   setStatus("Ready.");
 }
 
+async function loadImage(file) {
+  await pausePlayback();
+  resetBuffer();
+  state.sampledColors = [];
+  state.keyMode = "auto";
+  state.samplingActive = false;
+  state.viewMode = "composite";
+  if (state.sourceUrl) { URL.revokeObjectURL(state.sourceUrl); state.sourceUrl = null; }
+
+  el.sourceVideo.removeAttribute("src");
+  el.sourceVideo.load();
+
+  state.sourceName = file.name;
+  state.sourceUrl = URL.createObjectURL(file);
+  el.videoInput.value = "";
+  setStatus("Loading image...", true);
+
+  const img = el.sourceImage;
+  img.src = state.sourceUrl;
+  await new Promise((resolve, reject) => {
+    img.onload = () => { img.onload = null; img.onerror = null; resolve(); };
+    img.onerror = () => { img.onload = null; img.onerror = null; reject(new Error("Cannot load image.")); };
+  });
+
+  state.duration = 0;
+  state.fps = 0;
+  state.frameCount = 0;
+  setCanvasSize(img.naturalWidth, img.naturalHeight);
+  renderer.setImageSource(img);
+  setImageMode(true);
+  updateMeta();
+  renderSampleSwatches();
+  setKeyMode("auto");
+  setViewMode("composite");
+  drawCurrentFrame();
+  updateButtons();
+  setStatus("Ready.");
+}
+
 async function handleFile(file) {
   if (!file) return;
-  try { await loadVideo(file); } catch (e) { console.error(e); setStatus(e.message || "Load failed."); }
+  const isImage = file.type.startsWith("image/");
+  try {
+    if (isImage) {
+      await loadImage(file);
+    } else {
+      await loadVideo(file);
+    }
+  } catch (e) { console.error(e); setStatus(e.message || "Load failed."); }
 }
 
 function sampleColorFromSourceEvent(event) {
@@ -606,7 +690,7 @@ function sampleColorFromSourceEvent(event) {
 // ── Process ──
 
 async function processVideo() {
-  if (!state.sourceUrl || state.processing) return;
+  if (!state.sourceUrl || state.isImage || state.processing) return;
   await pausePlayback();
   resetBuffer();
   state.processing = true;
@@ -673,6 +757,20 @@ async function exportVideo({ alpha }) {
   finally { state.exporting = false; hideBusy(); updateButtons(); drawCurrentFrame(); }
 }
 
+function exportImagePng({ alpha }) {
+  if (!state.sourceUrl || !state.isImage) return;
+  drawSourceFrame();
+  const canvas = document.createElement("canvas");
+  canvas.width = state.width;
+  canvas.height = state.height;
+  renderer.renderInto(canvas, { alphaBackground: alpha, viewModeOverride: 0 });
+  const safeName = (state.sourceName || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9\-_]+/gi, "_").toLowerCase();
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    downloadBlob(blob, `${safeName}${alpha ? "_alpha" : ""}.png`);
+  }, "image/png");
+}
+
 // ── Events ──
 
 el.videoInput.addEventListener("change", (e) => { handleFile(e.target.files?.[0]); });
@@ -697,6 +795,8 @@ el.processButton.addEventListener("click", () => {
 });
 el.exportWebmButton.addEventListener("click", () => exportVideo({ alpha: false }));
 el.exportAlphaButton.addEventListener("click", () => exportVideo({ alpha: true }));
+el.exportPngButton.addEventListener("click", () => exportImagePng({ alpha: false }));
+el.exportAlphaPngButton.addEventListener("click", () => exportImagePng({ alpha: true }));
 el.sourceVideo.addEventListener("ended", () => { pausePlayback().then(() => drawCurrentFrame()).catch(console.error); });
 document.querySelectorAll("[data-view-mode]").forEach((btn) => {
   if (btn.dataset.viewMode === "source") {

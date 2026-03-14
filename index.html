@@ -22,13 +22,19 @@
           <div class="tooltip-wrap" id="wrap-export-alpha" data-tip="Process frames first to enable export.">
             <button id="export-alpha-button" class="btn" disabled>Export Alpha WebM</button>
           </div>
+          <div class="tooltip-wrap" id="wrap-export-png" data-tip="" hidden>
+            <button id="export-png-button" class="btn" disabled>Download PNG</button>
+          </div>
+          <div class="tooltip-wrap" id="wrap-export-alpha-png" data-tip="" hidden>
+            <button id="export-alpha-png-button" class="btn" disabled>Download Alpha PNG</button>
+          </div>
         </div>
       </header>
 
       <div class="workspace">
         <div class="stage">
           <label class="viewer" id="source-drop-zone" for="video-input">
-            <input id="video-input" type="file" accept="video/*" hidden />
+            <input id="video-input" type="file" accept="video/*,image/*" hidden />
             <div class="viewer-head">
               <span class="viewer-label">Original</span>
             </div>
@@ -37,7 +43,7 @@
             </div>
             <div id="drop-hint" class="drop-hint">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <strong>Drop video here</strong>
+              <strong>Drop video or image here</strong>
               <span>or click to browse</span>
             </div>
           </label>
@@ -208,5 +214,6 @@
     </div>
 
     <video id="source-video" crossorigin="anonymous" playsinline muted hidden></video>
+    <img id="source-image" crossorigin="anonymous" hidden />
   </body>
 </html>

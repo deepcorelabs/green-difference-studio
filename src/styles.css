@@ -603,6 +603,12 @@ label.viewer.sample-mode .viewer-canvas {
   line-height: 1.45;
 }
 
+/* ── Image mode ── */
+
+.app.image-mode .bottombar {
+  display: none;
+}
+
 /* ── Bottom Bar ── */
 
 .bottombar {
