@@ -279,6 +279,7 @@ export class ChromaKeyRenderer {
 
   setSource(video) {
     this._disposeTextures();
+    if (this._scrubTexture) { this._scrubTexture.dispose(); this._scrubTexture = null; }
     this.video = video;
 
     this.videoTexture = new THREE.VideoTexture(video);
@@ -288,10 +289,15 @@ export class ChromaKeyRenderer {
     this.videoTexture.generateMipmaps = false;
 
     this.uniforms.uTexture.value = this.videoTexture;
+
+    // Clear the processed canvas and WebGL buffer
+    this.renderer.clear();
+    this.processedContext.clearRect(0, 0, this.size.width, this.size.height);
   }
 
   setImageSource(img) {
     this._disposeTextures();
+    if (this._scrubTexture) { this._scrubTexture.dispose(); this._scrubTexture = null; }
     this.video = null;
 
     this.imageTexture = new THREE.Texture(img);

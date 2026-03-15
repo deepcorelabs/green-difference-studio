@@ -27,3 +27,13 @@ Thumbs.db
 
 # Vite cache
 .vite/
+
+# Large media files (use GitHub Releases for demo assets)
+input.mp4
+*.mp4
+
+# Test files
+test-*.html
+
+# Claude config
+.claude/

@@ -70,6 +70,23 @@ html, body {
   white-space: nowrap;
 }
 
+.topbar-subtitle {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.6rem;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: 10px;
+  letter-spacing: 0.02em;
+}
+
+.topbar-version {
+  color: var(--accent);
+  font-size: 0.55rem;
+  margin-left: 4px;
+  opacity: 0.7;
+}
+
 .topbar-right {
   justify-content: flex-end;
   gap: 8px;

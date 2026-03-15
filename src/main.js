@@ -134,6 +134,7 @@ const state = {
   sampleSimilarity: 0.1,
   sampledColors: [],
   frameCache: [],
+  cacheBuilding: false,
   trackers: [],
   recording: false,
   _activeTrackers: [],
@@ -409,8 +410,8 @@ function updateButtons() {
     el.exportWebmButton.hidden = true;
     el.exportAlphaButton.hidden = true;
   } else {
-    el.processButton.textContent = state.processing ? "Cancel" : "Process";
-    el.processButton.disabled = !hasSource || state.exporting;
+    el.processButton.textContent = state.processing ? "Cancel" : state.cacheBuilding ? "Caching..." : "Process";
+    el.processButton.disabled = !hasSource || state.exporting || state.cacheBuilding;
     el.playToggle.disabled = !hasSource || busy();
     el.stepBackward.disabled = !hasSource || busy();
     el.stepForward.disabled = !hasSource || busy();
@@ -556,21 +557,32 @@ function scrubTo(ratio) {
     if (frame) {
       sourceCtx.clearRect(0, 0, state.width, state.height);
       sourceCtx.drawImage(frame.bitmap, 0, 0, state.width, state.height);
-      syncTrackerUniformsAt(scrubTime);
-      const active = state._activeTrackers || [];
-      const needsFloodFill = active.length > 0;
-      const isAlphaView = state.viewMode === "alpha";
-      if (needsFloodFill && isAlphaView) {
-        renderer.renderPreviewFromCanvas(el.sourceCanvas, { viewModeOverride: 0 });
-        applyTrackerFloodFillToCanvas(el.processedCanvas, active, true);
-      } else {
-        renderer.renderPreviewFromCanvas(el.sourceCanvas);
-        applyTrackerFloodFillToCanvas(el.processedCanvas, active, false);
-      }
-      drawTrackerOverlays(scrubTime);
-      updateTrackerIndicators(scrubTime);
+      renderScrubFrame(scrubTime);
+      return;
     }
   }
+
+  // Fallback: seek video directly when cache isn't ready
+  seekVideo(scrubTime).then(() => {
+    drawSourceFrame();
+    renderScrubFrame(scrubTime);
+  }).catch(() => {});
+}
+
+function renderScrubFrame(scrubTime) {
+  syncTrackerUniformsAt(scrubTime);
+  const active = state._activeTrackers || [];
+  const needsFloodFill = active.length > 0;
+  const isAlphaView = state.viewMode === "alpha";
+  if (needsFloodFill && isAlphaView) {
+    renderer.renderPreviewFromCanvas(el.sourceCanvas, { viewModeOverride: 0 });
+    applyTrackerFloodFillToCanvas(el.processedCanvas, active, true);
+  } else {
+    renderer.renderPreviewFromCanvas(el.sourceCanvas);
+    applyTrackerFloodFillToCanvas(el.processedCanvas, active, false);
+  }
+  drawTrackerOverlays(scrubTime);
+  updateTrackerIndicators(scrubTime);
 }
 
 function onTLDown(e) {
@@ -614,17 +626,39 @@ el.keyframeLane.addEventListener("mousedown", (e) => {
 // ── Frame Cache ──
 
 const CACHE_WIDTH = 320;
+let cachePromise = null;
+let cacheAbort = false;
 
 function clearFrameCache() {
+  cacheAbort = true;
   state.frameCache.forEach((f) => f.bitmap?.close());
   state.frameCache = [];
+  // Clear timeline thumbnails
+  const tc = el.timelineThumbs;
+  const tcCtx = tc.getContext("2d");
+  tcCtx.fillStyle = "#0a0e12";
+  tcCtx.fillRect(0, 0, tc.width, tc.height);
 }
 
-async function buildFrameCache() {
-  clearFrameCache();
+async function buildFrameCacheBackground() {
+  if (state.cacheBuilding) return cachePromise;
 
-  const wasMutedCache = el.sourceVideo.muted;
-  el.sourceVideo.muted = true;
+  clearFrameCache();
+  cacheAbort = false;
+  state.cacheBuilding = true;
+  updateButtons();
+
+  // Use a separate hidden video element so the user can scrub/play the main one
+  const cacheVideo = document.createElement("video");
+  cacheVideo.crossOrigin = "anonymous";
+  cacheVideo.muted = true;
+  cacheVideo.playsInline = true;
+  cacheVideo.src = state.sourceUrl;
+
+  await new Promise((resolve, reject) => {
+    cacheVideo.addEventListener("loadedmetadata", resolve, { once: true });
+    cacheVideo.addEventListener("error", reject, { once: true });
+  });
 
   const cacheH = Math.round(CACHE_WIDTH * state.height / state.width);
   const cacheCanvas = document.createElement("canvas");
@@ -632,51 +666,65 @@ async function buildFrameCache() {
   cacheCanvas.height = cacheH;
   const cacheCtx = cacheCanvas.getContext("2d");
 
-  showBusy("Preparing Video", "Building frame cache...", { cancelable: false });
-  const approxTotal = Math.max(1, state.frameCount);
+  setStatus("Building frame cache...", true);
 
-  // Frame 0
-  await seekVideo(0);
-  cacheCtx.drawImage(el.sourceVideo, 0, 0, CACHE_WIDTH, cacheH);
-  state.frameCache.push({ time: el.sourceVideo.currentTime, bitmap: await createImageBitmap(cacheCanvas) });
+  // Helper: seek the cache video
+  const seekCacheVideo = (t) => new Promise((resolve) => {
+    const done = () => { cacheVideo.removeEventListener("seeked", done); resolve(); };
+    cacheVideo.addEventListener("seeked", done, { once: true });
+    cacheVideo.currentTime = t;
+  });
 
-  // Play through remaining frames
-  while (!el.sourceVideo.ended) {
-    const meta = await nextVideoFrame();
-    if (!meta) break;
+  // Helper: advance to next frame via rVFC
+  const nextCacheFrame = () => new Promise((resolve) => {
+    if (cacheVideo.ended) { resolve(null); return; }
+    let tid;
+    const onFrame = (_now, meta) => { clearTimeout(tid); cacheVideo.removeEventListener("ended", onEnded); cacheVideo.pause(); resolve(meta); };
+    const onEnded = () => { clearTimeout(tid); resolve(null); };
+    tid = setTimeout(() => { cacheVideo.pause(); cacheVideo.removeEventListener("ended", onEnded); resolve(null); }, 5000);
+    cacheVideo.addEventListener("ended", onEnded, { once: true });
+    cacheVideo.requestVideoFrameCallback(onFrame);
+    cacheVideo.play().catch(() => resolve(null));
+  });
 
-    cacheCtx.drawImage(el.sourceVideo, 0, 0, CACHE_WIDTH, cacheH);
-    state.frameCache.push({ time: meta.mediaTime, bitmap: await createImageBitmap(cacheCanvas) });
+  try {
+    // Frame 0
+    await seekCacheVideo(0);
+    cacheCtx.drawImage(cacheVideo, 0, 0, CACHE_WIDTH, cacheH);
+    state.frameCache.push({ time: cacheVideo.currentTime, bitmap: await createImageBitmap(cacheCanvas) });
 
-    if (state.duration > 0) {
-      const p = meta.mediaTime / state.duration;
-      const liveTotal = meta.mediaTime > 0.01
-        ? Math.round(state.frameCache.length / (meta.mediaTime / state.duration))
-        : approxTotal;
-      setBusyProgress(p, state.frameCache.length, liveTotal);
+    // Play through remaining frames, yielding to the main thread regularly
+    while (!cacheVideo.ended && !cacheAbort) {
+      const meta = await nextCacheFrame();
+      if (!meta || cacheAbort) break;
+
+      cacheCtx.drawImage(cacheVideo, 0, 0, CACHE_WIDTH, cacheH);
+      state.frameCache.push({ time: meta.mediaTime, bitmap: await createImageBitmap(cacheCanvas) });
+
+      // Yield every 4 frames to keep UI responsive, rebuild thumbs periodically
+      if (state.frameCache.length % 4 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      if (state.frameCache.length % 20 === 0) {
+        buildThumbnailsFromCache();
+      }
     }
 
-    if (state.frameCache.length % 8 === 0) await nextPaint();
+    // Derive real FPS/frame count from what we actually got
+    if (state.frameCache.length > 1 && state.duration > 0) {
+      state.fps = state.frameCache.length / state.duration;
+      state.frameCount = state.frameCache.length;
+      updateMeta();
+    }
+
+    buildThumbnailsFromCache();
+  } finally {
+    cacheVideo.src = "";
+    cacheVideo.load();
+    state.cacheBuilding = false;
+    updateButtons();
+    setStatus("Ready.");
   }
-
-  // Derive real FPS/frame count from what we actually got
-  if (state.frameCache.length > 1 && state.duration > 0) {
-    state.fps = state.frameCache.length / state.duration;
-    state.frameCount = state.frameCache.length;
-    updateMeta();
-  }
-
-  setBusyMessage("Finalizing", "Building thumbnails...");
-  await nextPaint();
-  buildThumbnailsFromCache();
-
-  setBusyMessage(null, "Seeking to start...");
-  await nextPaint();
-  await seekVideo(0);
-
-  el.sourceVideo.muted = wasMutedCache;
-  updateMuteUI();
-  hideBusy();
 }
 
 function buildThumbnailsFromCache() {
@@ -908,16 +956,20 @@ async function loadVideo(file) {
   state.frameCount = estimateFrameCount(state.duration, state.fps);
   setCanvasSize(el.sourceVideo.videoWidth, el.sourceVideo.videoHeight);
   renderer.setSource(el.sourceVideo);
+  // Clear processed canvas with new dimensions to remove stale content
+  const pCtx = el.processedCanvas.getContext("2d", { alpha: true });
+  pCtx.clearRect(0, 0, el.processedCanvas.width, el.processedCanvas.height);
   updateMeta();
 
-  setStatus("Building frame cache...", true);
-  await buildFrameCache();
   renderSampleSwatches();
   setKeyMode("auto");
   setViewMode("composite");
   drawCurrentFrame();
   updateButtons();
   setStatus("Ready.");
+
+  // Build frame cache in the background — user can interact immediately
+  cachePromise = buildFrameCacheBackground();
 }
 
 async function loadImage(file) {
@@ -1056,6 +1108,10 @@ async function processVideo() {
   if (!el.sourceVideo.requestVideoFrameCallback) {
     setStatus("requestVideoFrameCallback not supported in this browser.");
     return;
+  }
+  if (state.cacheBuilding && cachePromise) {
+    setStatus("Waiting for frame cache...", true);
+    await cachePromise;
   }
 
   await pausePlayback();
@@ -2350,12 +2406,29 @@ syncOutputs();
 const welcomeModal = document.querySelector("#welcome-modal");
 const welcomeDemo = document.querySelector("#welcome-demo");
 
-async function loadDemoFile() {
+// Demo video: try local first (dev), then external URL (GitHub Pages)
+const DEMO_URLS = [
+  "./bunny.mp4",
+  "https://deepcorelabs.com/tools/green-difference-studio/bunny.mp4",
+];
+
+async function findDemoUrl() {
+  for (const url of DEMO_URLS) {
+    try {
+      const res = await fetch(url, { method: "HEAD" });
+      if (res.ok) return url;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+async function loadDemoFile(url) {
   welcomeModal.hidden = true;
   try {
-    const res = await fetch("/input.mp4");
+    setStatus("Loading demo...", true);
+    const res = await fetch(url);
     const blob = await res.blob();
-    await handleFile(new File([blob], "input.mp4", { type: "video/mp4" }));
+    await handleFile(new File([blob], "demo.mp4", { type: "video/mp4" }));
     togglePlayback();
   } catch (e) {
     console.error("Demo load failed:", e);
@@ -2365,11 +2438,11 @@ async function loadDemoFile() {
 
 document.querySelector("#welcome-modal-close").addEventListener("click", () => { welcomeModal.hidden = true; });
 
-fetch("/input.mp4", { method: "HEAD" }).then((res) => {
-  if (res.ok) {
+findDemoUrl().then((url) => {
+  if (url) {
     welcomeModal.hidden = false;
-    welcomeDemo.addEventListener("click", loadDemoFile);
+    welcomeDemo.addEventListener("click", () => loadDemoFile(url));
   }
-}).catch(() => {});
+});
 
 el.videoInput.addEventListener("change", () => { welcomeModal.hidden = true; }, { once: true });

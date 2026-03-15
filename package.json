@@ -7,9 +7,9 @@
     "build": "vite build",
     "preview": "vite preview"
   },
-  "keywords": [],
+  "keywords": ["chroma-key", "green-screen", "video-processing", "webgl", "vite"],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@jaames/iro": "^5.5.2",
     "gsap": "^3.14.2",
