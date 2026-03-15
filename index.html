@@ -160,6 +160,12 @@
             <div class="sample-swatches" id="sample-swatches"></div>
           </div>
 
+          <div class="ctrl-section">
+            <p class="ctrl-heading">Trackers</p>
+            <button id="record-tracker-btn" class="btn btn-record-tracker" disabled>Record Tracker</button>
+            <div id="tracker-list" class="tracker-list"></div>
+          </div>
+
           <div class="status-strip">
             <span class="status-dot" id="status-dot"></span>
             <span id="status-text">Waiting for source media.</span>
@@ -276,6 +282,27 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <div id="tracker-instructions" class="welcome-overlay" hidden>
+      <div class="welcome-card">
+        <h2>Record Tracker</h2>
+        <p class="welcome-sub">How to track</p>
+        <div class="tracker-instructions-body">
+          <p><strong>Press and hold mouse button</strong> on either viewer to track.</p>
+          <p>Don't release unless you need to reposition.</p>
+          <p>Video starts on first click. Plays at 0.5x speed.</p>
+          <p>Gaps are interpolated automatically.</p>
+        </div>
+        <div class="welcome-actions">
+          <button id="tracker-instructions-cancel" class="btn welcome-btn welcome-btn-browse">Cancel</button>
+          <button id="tracker-instructions-start" class="btn welcome-btn welcome-btn-demo">Ready</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="countdown-overlay" class="countdown-overlay" hidden>
+      <span id="countdown-number" class="countdown-number">3</span>
     </div>
 
     <video id="source-video" crossorigin="anonymous" playsinline muted hidden></video>

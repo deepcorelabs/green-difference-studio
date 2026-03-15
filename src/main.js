@@ -80,6 +80,10 @@ const el = {
   pickSampleButton: document.querySelector("#pick-sample-button"),
   sampleSimilarityGroup: document.querySelector("#sample-similarity-group"),
   sampleSimilarityOutput: document.querySelector("#sample-similarity-output"),
+  recordTrackerBtn: document.querySelector("#record-tracker-btn"),
+  trackerList: document.querySelector("#tracker-list"),
+  countdownOverlay: document.querySelector("#countdown-overlay"),
+  countdownNumber: document.querySelector("#countdown-number"),
 };
 
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
@@ -121,6 +125,8 @@ const state = {
   sampleSimilarity: 0.1,
   sampledColors: [],
   frameCache: [],
+  trackers: [],
+  recording: false,
 };
 
 // ── Threshold Mode ──
@@ -418,6 +424,7 @@ function updateButtons() {
   );
 
   el.sourceDropZone.classList.toggle("has-video", hasSource);
+  el.recordTrackerBtn.disabled = !hasSource || state.recording || busy();
 }
 
 function updateProgress(progress, total = state.frameCount, current = state.processedFramesCount) {
@@ -686,6 +693,38 @@ function drawSourceFrame() {
   sourceCtx.clearRect(0, 0, state.width, state.height);
   const src = state.isImage ? el.sourceImage : el.sourceVideo;
   sourceCtx.drawImage(src, 0, 0, state.width, state.height);
+  drawTrackerOverlays();
+}
+
+function drawTrackerOverlays() {
+  if (!state.trackers.length) return;
+  for (const tracker of state.trackers) {
+    if (tracker.samples.length < 2) continue;
+    sourceCtx.save();
+    sourceCtx.strokeStyle = "rgba(114, 255, 159, 0.7)";
+    sourceCtx.lineWidth = 2;
+    sourceCtx.lineJoin = "round";
+    sourceCtx.beginPath();
+    const s0 = tracker.samples[0];
+    sourceCtx.moveTo(s0.x * state.width, s0.y * state.height);
+    for (let i = 1; i < tracker.samples.length; i++) {
+      const s = tracker.samples[i];
+      sourceCtx.lineTo(s.x * state.width, s.y * state.height);
+    }
+    sourceCtx.stroke();
+    // Draw start and end dots
+    const first = tracker.samples[0];
+    const last = tracker.samples[tracker.samples.length - 1];
+    sourceCtx.fillStyle = "rgba(114, 255, 159, 0.9)";
+    sourceCtx.beginPath();
+    sourceCtx.arc(first.x * state.width, first.y * state.height, 4, 0, Math.PI * 2);
+    sourceCtx.fill();
+    sourceCtx.fillStyle = "rgba(255, 100, 100, 0.9)";
+    sourceCtx.beginPath();
+    sourceCtx.arc(last.x * state.width, last.y * state.height, 4, 0, Math.PI * 2);
+    sourceCtx.fill();
+    sourceCtx.restore();
+  }
 }
 
 function drawCurrentFrame() {
@@ -1342,6 +1381,259 @@ setProcessedBackground("dark-checker");
 renderSampleSwatches();
 setViewMode("composite");
 setKeyMode("auto");
+
+// ── Trackers ──
+
+function renderTrackerList() {
+  if (!state.trackers.length) {
+    el.trackerList.innerHTML = "";
+    return;
+  }
+  el.trackerList.innerHTML = state.trackers
+    .map((t, i) =>
+      `<div class="tracker-item">
+        <span class="tracker-item-name"><span class="tracker-dot"></span>${t.name} (${t.samples.length} pts)</span>
+        <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
+      </div>`,
+    )
+    .join("");
+}
+
+el.trackerList.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-tracker-index]");
+  if (!btn) return;
+  const idx = Number(btn.dataset.trackerIndex);
+  if (!Number.isInteger(idx)) return;
+  state.trackers.splice(idx, 1);
+  renderTrackerList();
+  drawCurrentFrame();
+});
+
+function showCountdown() {
+  return new Promise((resolve) => {
+    el.countdownOverlay.hidden = false;
+    let count = 3;
+    el.countdownNumber.textContent = count;
+    el.countdownNumber.style.animation = "none";
+    void el.countdownNumber.offsetWidth;
+    el.countdownNumber.style.animation = "";
+
+    const tick = () => {
+      count--;
+      if (count > 0) {
+        el.countdownNumber.textContent = count;
+        el.countdownNumber.style.animation = "none";
+        void el.countdownNumber.offsetWidth;
+        el.countdownNumber.style.animation = "";
+        setTimeout(tick, 1000);
+      } else {
+        el.countdownNumber.textContent = "GO";
+        el.countdownNumber.style.animation = "none";
+        void el.countdownNumber.offsetWidth;
+        el.countdownNumber.style.animation = "";
+        setTimeout(() => {
+          el.countdownOverlay.hidden = true;
+          resolve();
+        }, 500);
+      }
+    };
+    setTimeout(tick, 1000);
+  });
+}
+
+function getTrackerNormPos(e) {
+  const targets = [el.sourceCanvas, el.processedCanvas];
+  for (const canvas of targets) {
+    const rect = canvas.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      return {
+        x: clamp((clientX - rect.left) / rect.width, 0, 1),
+        y: clamp((clientY - rect.top) / rect.height, 0, 1),
+      };
+    }
+  }
+  return null;
+}
+
+function showTrackerInstructions() {
+  return new Promise((resolve) => {
+    const modal = document.querySelector("#tracker-instructions");
+    const startBtn = document.querySelector("#tracker-instructions-start");
+    const cancelBtn = document.querySelector("#tracker-instructions-cancel");
+    modal.hidden = false;
+
+    const cleanup = () => { modal.hidden = true; startBtn.removeEventListener("click", onStart); cancelBtn.removeEventListener("click", onCancel); };
+    const onStart = () => { cleanup(); resolve(true); };
+    const onCancel = () => { cleanup(); resolve(false); };
+    startBtn.addEventListener("click", onStart);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
+
+function drawLiveTrail(samples, currentIndex) {
+  const trailLength = 30;
+  const startIdx = Math.max(0, currentIndex - trailLength);
+  if (currentIndex - startIdx < 2) return;
+
+  sourceCtx.save();
+  sourceCtx.lineWidth = 2;
+  sourceCtx.lineJoin = "round";
+  sourceCtx.lineCap = "round";
+
+  for (let i = startIdx + 1; i <= currentIndex; i++) {
+    const s = samples[i];
+    const prev = samples[i - 1];
+    if (!s || !prev) continue;
+    // Skip segments where either end is untracked
+    if (s.x == null || prev.x == null) continue;
+
+    const fade = (i - startIdx) / (currentIndex - startIdx);
+    sourceCtx.strokeStyle = `rgba(114, 255, 159, ${fade * 0.8})`;
+    sourceCtx.beginPath();
+    sourceCtx.moveTo(prev.x * state.width, prev.y * state.height);
+    sourceCtx.lineTo(s.x * state.width, s.y * state.height);
+    sourceCtx.stroke();
+  }
+
+  // Current position dot
+  const cur = samples[currentIndex];
+  if (cur && cur.x != null) {
+    sourceCtx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    sourceCtx.beginPath();
+    sourceCtx.arc(cur.x * state.width, cur.y * state.height, 5, 0, Math.PI * 2);
+    sourceCtx.fill();
+    sourceCtx.strokeStyle = "rgba(114, 255, 159, 0.8)";
+    sourceCtx.lineWidth = 1.5;
+    sourceCtx.stroke();
+  }
+
+  sourceCtx.restore();
+}
+
+async function startTrackerRecording() {
+  if (!state.sourceUrl || state.isImage || state.recording) return;
+
+  await pausePlayback();
+
+  const proceed = await showTrackerInstructions();
+  if (!proceed) return;
+
+  state.recording = true;
+  el.app.classList.add("tracker-recording");
+  updateButtons();
+
+  await seekVideo(0);
+  el.sourceVideo.playbackRate = 0.5;
+  el.sourceVideo.muted = false;
+  drawCurrentFrame();
+
+  const samples = [];
+  let lastX = null;
+  let lastY = null;
+  let mouseDown = false;
+  let playbackStarted = false;
+
+  const onMove = (e) => {
+    const pos = getTrackerNormPos(e);
+    if (pos) { lastX = pos.x; lastY = pos.y; }
+  };
+  const onDown = (e) => {
+    if (e.button !== 0 && !e.touches) return;
+    mouseDown = true;
+    const pos = getTrackerNormPos(e);
+    if (pos) { lastX = pos.x; lastY = pos.y; }
+    // First mousedown starts playback
+    if (!playbackStarted) {
+      playbackStarted = true;
+      beginPlayback();
+    }
+  };
+  const onUp = () => { mouseDown = false; };
+
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mousedown", onDown);
+  document.addEventListener("mouseup", onUp);
+  document.addEventListener("touchstart", onDown, { passive: true });
+  document.addEventListener("touchmove", onMove, { passive: true });
+  document.addEventListener("touchend", onUp);
+
+  let playbackResolve;
+  const playbackPromise = new Promise((resolve) => { playbackResolve = resolve; });
+
+  function beginPlayback() {
+    el.sourceVideo.addEventListener("ended", () => playbackResolve(), { once: true });
+
+    const onFrame = (_now, metadata) => {
+      const mediaTime = metadata ? metadata.mediaTime : el.sourceVideo.currentTime;
+
+      if (mouseDown && lastX != null) {
+        samples.push({ t: mediaTime, x: lastX, y: lastY });
+      } else {
+        samples.push({ t: mediaTime, x: null, y: null });
+      }
+
+      drawSourceFrame();
+      drawLiveTrail(samples, samples.length - 1);
+      renderer.renderPreview();
+      updateTimeline(mediaTime);
+
+      if (!el.sourceVideo.ended && !el.sourceVideo.paused) {
+        el.sourceVideo.requestVideoFrameCallback(onFrame);
+      }
+    };
+
+    el.sourceVideo.requestVideoFrameCallback(onFrame);
+    el.sourceVideo.play().catch(() => playbackResolve());
+  }
+
+  await playbackPromise;
+
+  // Cleanup listeners
+  document.removeEventListener("mousemove", onMove);
+  document.removeEventListener("mousedown", onDown);
+  document.removeEventListener("mouseup", onUp);
+  document.removeEventListener("touchstart", onDown);
+  document.removeEventListener("touchmove", onMove);
+  document.removeEventListener("touchend", onUp);
+
+  el.sourceVideo.pause();
+  el.sourceVideo.playbackRate = state.playbackRate;
+  state.recording = false;
+  el.app.classList.remove("tracker-recording");
+
+  // Interpolate gaps between tracked segments
+  const tracked = [];
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    if (s.x != null) {
+      tracked.push(s);
+    } else {
+      let prevIdx = -1, nextIdx = -1;
+      for (let j = i - 1; j >= 0; j--) { if (samples[j].x != null) { prevIdx = j; break; } }
+      for (let j = i + 1; j < samples.length; j++) { if (samples[j].x != null) { nextIdx = j; break; } }
+      if (prevIdx >= 0 && nextIdx >= 0) {
+        const p = samples[prevIdx], n = samples[nextIdx];
+        const t = (i - prevIdx) / (nextIdx - prevIdx);
+        tracked.push({ t: s.t, x: p.x + (n.x - p.x) * t, y: p.y + (n.y - p.y) * t });
+      } else if (prevIdx >= 0) {
+        tracked.push({ t: s.t, x: samples[prevIdx].x, y: samples[prevIdx].y });
+      }
+    }
+  }
+
+  if (tracked.length > 0) {
+    state.trackers.push({ name: `Tracker ${state.trackers.length + 1}`, samples: tracked });
+  }
+
+  renderTrackerList();
+  updateButtons();
+  await seekVideo(0);
+  drawCurrentFrame();
+}
+
+el.recordTrackerBtn.addEventListener("click", startTrackerRecording);
 
 // ── Init ──
 

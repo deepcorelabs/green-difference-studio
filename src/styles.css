@@ -1163,6 +1163,106 @@ html, body {
   background: linear-gradient(180deg, #34343490 0%, #28282810 100%);
 }
 
+.tracker-instructions-body {
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.tracker-instructions-body strong {
+  color: var(--text);
+}
+
+/* ── Tracker ── */
+
+.btn-record-tracker {
+  width: 100%;
+}
+
+.tracker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tracker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.tracker-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tracker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.tracker-delete {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.tracker-delete:hover {
+  color: #ff6b6b;
+}
+
+.app.tracker-recording .viewer-wrap,
+.app.tracker-recording .viewer-canvas {
+  cursor: crosshair;
+}
+
+/* ── Countdown ── */
+
+.countdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1002;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 9, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.countdown-overlay[hidden] { display: none; }
+
+.countdown-number {
+  font-family: "Syne", sans-serif;
+  font-size: 80px;
+  font-weight: 700;
+  color: var(--accent);
+  animation: countPulse 1s ease-out;
+}
+
+@keyframes countPulse {
+  0% { transform: scale(1.6); opacity: 0; }
+  30% { transform: scale(1); opacity: 1; }
+  100% { opacity: 1; }
+}
+
 /* ── Responsive ── */
 
 @media (max-width: 900px) {
