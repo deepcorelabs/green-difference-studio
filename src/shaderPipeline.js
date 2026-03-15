@@ -52,41 +52,6 @@ float sampleRingMinAlpha(vec2 uv, vec2 r) {
   return mn;
 }
 
-float estimateLocalEdgeSoftness(vec2 uv) {
-  float dx = abs(
-    quickKeyAlpha(uv + vec2(uTexelSize.x, 0.0)) -
-    quickKeyAlpha(uv - vec2(uTexelSize.x, 0.0))
-  );
-  float dy = abs(
-    quickKeyAlpha(uv + vec2(0.0, uTexelSize.y)) -
-    quickKeyAlpha(uv - vec2(0.0, uTexelSize.y))
-  );
-  return clamp((dx + dy) * 2.0, 0.0, 1.0);
-}
-
-float estimateApproxDistanceToBackground(vec2 uv, float maxDepthPx) {
-  if (maxDepthPx <= 0.5) return maxDepthPx;
-
-  float threshold = 0.85;
-
-  vec2 r1 = uTexelSize * (maxDepthPx * 0.125);
-  if (sampleRingMinAlpha(uv, r1) < threshold) return maxDepthPx * 0.125;
-
-  vec2 r2 = uTexelSize * (maxDepthPx * 0.25);
-  if (sampleRingMinAlpha(uv, r2) < threshold) return maxDepthPx * 0.25;
-
-  vec2 r3 = uTexelSize * (maxDepthPx * 0.5);
-  if (sampleRingMinAlpha(uv, r3) < threshold) return maxDepthPx * 0.5;
-
-  vec2 r4 = uTexelSize * (maxDepthPx * 0.75);
-  if (sampleRingMinAlpha(uv, r4) < threshold) return maxDepthPx * 0.75;
-
-  vec2 r5 = uTexelSize * maxDepthPx;
-  if (sampleRingMinAlpha(uv, r5) < threshold) return maxDepthPx;
-
-  return maxDepthPx + 1.0;
-}
-
 vec3 rgbToHsl(vec3 c) {
   float mx = max(max(c.r, c.g), c.b);
   float mn = min(min(c.r, c.g), c.b);
@@ -198,42 +163,22 @@ float applyFeather(vec2 uv, float alpha) {
   return total / 9.0;
 }
 
-float alphaSimilarity(float a, float b, float strength) {
-  return 1.0 - smoothstep(strength, strength * 2.0, abs(a - b));
-}
+// Alpha-threshold region membership. No ray marching, no distance dependency.
+// The tracker samples a reference alpha; mode decides direction:
+//   keep  (mode > 0): affect pixels with alpha >= (ref - strength)
+//   discard (mode < 0): affect pixels with alpha <= (ref + strength)
+float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float strength, float mode) {
+  float refAlpha   = quickKeyAlpha(trackerUv);
+  float pixelAlpha = quickKeyAlpha(pixelUv);
+  float edge = max(strength * 0.35, 0.02);
 
-float localFloodConfidence(vec2 uv, float trackerAlpha, float strength) {
-  vec2 r = uTexelSize * 3.0;
-  float total = 0.0;
-  total += alphaSimilarity(quickKeyAlpha(uv), trackerAlpha, strength) * 1.2;
-  total += alphaSimilarity(quickKeyAlpha(uv + vec2(r.x, 0.0)), trackerAlpha, strength);
-  total += alphaSimilarity(quickKeyAlpha(uv - vec2(r.x, 0.0)), trackerAlpha, strength);
-  total += alphaSimilarity(quickKeyAlpha(uv + vec2(0.0, r.y)), trackerAlpha, strength);
-  total += alphaSimilarity(quickKeyAlpha(uv - vec2(0.0, r.y)), trackerAlpha, strength);
-  total += alphaSimilarity(quickKeyAlpha(uv + r), trackerAlpha, strength) * 0.7;
-  total += alphaSimilarity(quickKeyAlpha(uv - r), trackerAlpha, strength) * 0.7;
-  total += alphaSimilarity(quickKeyAlpha(uv + vec2(-r.x, r.y)), trackerAlpha, strength) * 0.7;
-  total += alphaSimilarity(quickKeyAlpha(uv + vec2(r.x, -r.y)), trackerAlpha, strength) * 0.7;
-  return total / 8.0;
-}
-
-float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float strength) {
-  float trackerAlpha = quickKeyAlpha(trackerUv);
-  float steps = 10.0;
-  float minConfidence = 1.0;
-  float sumConfidence = 0.0;
-
-  for (float s = 0.0; s <= 10.0; s += 1.0) {
-    vec2 sampleUv = mix(trackerUv, pixelUv, s / steps);
-    float conf = localFloodConfidence(sampleUv, trackerAlpha, strength);
-    minConfidence = min(minConfidence, conf);
-    sumConfidence += conf;
+  if (mode > 0.5) {
+    float cutoff = refAlpha - strength;
+    return smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
+  } else {
+    float cutoff = refAlpha + strength;
+    return 1.0 - smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
   }
-
-  float pixelConfidence = localFloodConfidence(pixelUv, trackerAlpha, strength);
-  float avgConfidence = sumConfidence / (steps + 1.0);
-  float pathConfidence = mix(minConfidence, avgConfidence, 0.7);
-  return pathConfidence * pixelConfidence;
 }
 
 void main() {
@@ -250,7 +195,7 @@ void main() {
     float mode = uTrackerModes[i];
     float strength = max(uTrackerStrengths[i], 0.001);
     if (abs(mode) < 0.5) continue;
-    float conn = trackerConnectivity(vUv, uTrackerPositions[i], strength);
+    float conn = trackerConnectivity(vUv, uTrackerPositions[i], strength, mode);
     if (mode > 0.5) {
       alpha = mix(alpha, 1.0, conn);
     } else {
@@ -263,18 +208,17 @@ void main() {
     return;
   }
 
-  // 3. Despill — uses choked alpha for edge proximity
+  // 3. Despill — choke-like inner-glow for color correction depth
   float spillAmount = max(sampleColor.g - max(sampleColor.r, sampleColor.b), 0.0);
   float spillFactor = 1.0 - smoothstep(0.0, max(uSpillSuppression, 0.0001), spillAmount);
   float edgeProximity = 1.0 - alpha;
   if (uDespillDepth > 0.5) {
-    float localSoftness = estimateLocalEdgeSoftness(vUv);
-    float adaptiveDepth = mix(uDespillDepth * 0.4, uDespillDepth, localSoftness);
-    float approxDistancePx = estimateApproxDistanceToBackground(vUv, adaptiveDepth);
-    // Exponential decay: concentrated near the edge, drops off sharply deeper in
-    float t = clamp(approxDistancePx / max(adaptiveDepth, 0.001), 0.0, 1.0);
-    float adaptiveProximity = exp(-t * 3.0);
-    edgeProximity = max(edgeProximity, adaptiveProximity);
+    float d = uDespillDepth;
+    float a1 = sampleRingMinAlpha(vUv, uTexelSize * max(d * 0.33, 0.5));
+    float a2 = sampleRingMinAlpha(vUv, uTexelSize * max(d * 0.66, 0.5));
+    float a3 = sampleRingMinAlpha(vUv, uTexelSize * d);
+    float depthProximity = (1.0 - a1) * 0.5 + (1.0 - a2) * 0.33 + (1.0 - a3) * 0.17;
+    edgeProximity = max(edgeProximity, depthProximity);
   }
   float edgeMask = spillFactor * edgeProximity;
 

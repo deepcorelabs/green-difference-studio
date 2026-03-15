@@ -81,6 +81,7 @@ const el = {
   pickSampleButton: document.querySelector("#pick-sample-button"),
   sampleSimilarityGroup: document.querySelector("#sample-similarity-group"),
   sampleSimilarityOutput: document.querySelector("#sample-similarity-output"),
+  addTrackerBtn: document.querySelector("#add-tracker-btn"),
   recordTrackerBtn: document.querySelector("#record-tracker-btn"),
   trackerList: document.querySelector("#tracker-list"),
   countdownOverlay: document.querySelector("#countdown-overlay"),
@@ -131,6 +132,7 @@ const state = {
   frameCache: [],
   trackers: [],
   recording: false,
+  selectedKeyframe: null,
 };
 
 // ── Threshold Mode ──
@@ -181,8 +183,8 @@ const despillSlider = noUiSlider.create(document.querySelector("#despill-slider"
 const despillDepthSlider = noUiSlider.create(document.querySelector("#despill-depth-slider"), {
   start: [0],
   connect: [true, false],
-  range: { min: 0, max: 200 },
-  step: 0.1,
+  range: { min: 0, max: 60 },
+  step: 0.5,
 });
 
 const chokeSlider = noUiSlider.create(document.querySelector("#choke-slider"), {
@@ -428,6 +430,7 @@ function updateButtons() {
   );
 
   el.sourceDropZone.classList.toggle("has-video", hasSource);
+  el.addTrackerBtn.disabled = !hasSource || state.recording || busy();
   el.recordTrackerBtn.disabled = !hasSource || state.recording || busy();
 }
 
@@ -582,6 +585,13 @@ function onTLDown(e) {
 
 el.timelineContainer.addEventListener("mousedown", onTLDown);
 el.timelineContainer.addEventListener("touchstart", onTLDown, { passive: false });
+
+el.keyframeLane.addEventListener("mousedown", (e) => {
+  if (!e.target.closest(".kf-diamond") && state.selectedKeyframe) {
+    state.selectedKeyframe = null;
+    document.querySelectorAll(".kf-diamond.selected").forEach((d) => d.classList.remove("selected"));
+  }
+});
 
 // ── Frame Cache ──
 
@@ -1323,6 +1333,11 @@ window.addEventListener("keydown", (e) => {
       el.sourceVideo.loop = state.loop;
       updateButtons();
     }
+  } else if (e.code === "Delete" || e.code === "Backspace") {
+    if (state.selectedKeyframe) {
+      e.preventDefault();
+      deleteSelectedKeyframe();
+    }
   }
 });
 
@@ -1392,6 +1407,75 @@ setKeyMode("auto");
 
 // ── Trackers ──
 
+function isTrackerOnAtTime(tracker, time) {
+  const onOff = tracker.onOff;
+  if (!onOff || !onOff.length) return true;
+  let on = onOff[0].on;
+  for (const kf of onOff) {
+    if (kf.t > time + 0.001) break;
+    on = kf.on;
+  }
+  return on;
+}
+
+function getOnRegions(tracker) {
+  const regions = [];
+  const onOff = tracker.onOff;
+  const dur = state.duration || 0;
+  if (!onOff || !onOff.length) {
+    regions.push({ start: 0, end: dur });
+    return regions;
+  }
+  let currentOn = false;
+  let onStart = 0;
+  for (const kf of onOff) {
+    if (kf.on && !currentOn) {
+      onStart = kf.t;
+      currentOn = true;
+    } else if (!kf.on && currentOn) {
+      regions.push({ start: onStart, end: kf.t });
+      currentOn = false;
+    }
+  }
+  if (currentOn) regions.push({ start: onStart, end: dur });
+  return regions;
+}
+
+function addStaticTracker() {
+  if (!state.sourceUrl) return;
+  const tracker = {
+    name: `Tracker ${state.trackers.length + 1}`,
+    samples: [{ t: 0, x: 0.5, y: 0.5, locked: true }],
+    mode: "off",
+    strength: 0.25,
+    onOff: [{ t: 0, on: true }],
+  };
+  state.trackers.push(tracker);
+  renderTrackerList();
+  syncTrackerUniforms();
+  drawCurrentFrame();
+}
+
+function toggleTrackerOnOff(trackerIdx) {
+  const tracker = state.trackers[trackerIdx];
+  if (!tracker) return;
+  const time = state.isImage ? 0 : el.sourceVideo.currentTime;
+  const currentlyOn = isTrackerOnAtTime(tracker, time);
+  if (!tracker.onOff) tracker.onOff = [];
+  const SNAP = state.fps > 0 ? 1 / (state.fps * 2) : 0.02;
+  const existing = tracker.onOff.findIndex((kf) => Math.abs(kf.t - time) < SNAP);
+  if (existing >= 0) {
+    tracker.onOff[existing].on = !currentlyOn;
+  } else {
+    tracker.onOff.push({ t: time, on: !currentlyOn });
+    tracker.onOff.sort((a, b) => a.t - b.t);
+  }
+  renderTrackerList();
+  renderKeyframeLane();
+  syncTrackerUniforms();
+  drawCurrentFrame();
+}
+
 function renderTrackerList() {
   if (!state.trackers.length) {
     el.trackerList.innerHTML = "";
@@ -1399,25 +1483,29 @@ function renderTrackerList() {
     renderKeyframeLane();
     return;
   }
+  const curTime = state.isImage ? 0 : (el.sourceVideo ? el.sourceVideo.currentTime : 0);
   el.trackerList.innerHTML = state.trackers
-    .map((t, i) =>
-      `<div class="tracker-item">
+    .map((t, i) => {
+      const isOn = isTrackerOnAtTime(t, curTime);
+      return `<div class="tracker-item">
         <span class="tracker-item-name"><span class="tracker-dot"></span>${t.name}</span>
         <div class="tracker-mode-group">
+          <button class="tracker-onoff-btn ${isOn ? "on" : ""}" data-tracker-onoff="${i}" title="${isOn ? "Set OFF at current time" : "Set ON at current time"}">&#x23FB;</button>
           <input class="tracker-strength" type="range" min="0.02" max="0.5" step="0.01" value="${(t.strength ?? 0.25).toFixed(2)}" data-tracker-strength="${i}" title="Strength" />
           <span class="tracker-strength-value">${(t.strength ?? 0.25).toFixed(2)}</span>
           <button class="tracker-mode-btn ${t.mode === "keep" ? "active keep" : ""}" data-tracker-idx="${i}" data-tmode="keep" title="Keep region">K</button>
           <button class="tracker-mode-btn ${t.mode === "discard" ? "active discard" : ""}" data-tracker-idx="${i}" data-tmode="discard" title="Discard region">D</button>
           <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
         </div>
-      </div>`,
-    )
+      </div>`;
+    })
     .join("");
   refreshTrackerIndicatorElements();
   renderKeyframeLane();
 }
 
 function getTrackerPositionAtTime(tracker, time) {
+  if (!isTrackerOnAtTime(tracker, time)) return null;
   const s = tracker.samples;
   if (!s.length) return null;
   const snapThreshold = state.fps > 0 ? 1 / state.fps : 0.05;
@@ -1430,7 +1518,7 @@ function getTrackerPositionAtTime(tracker, time) {
       nearestIdx = i;
     }
   }
-  if (nearestDist <= snapThreshold || s[nearestIdx].locked) {
+  if (nearestDist <= snapThreshold) {
     return { x: s[nearestIdx].x, y: s[nearestIdx].y, exact: true };
   }
   if (time <= s[0].t) return { x: s[0].x, y: s[0].y };
@@ -1468,13 +1556,10 @@ const trackerIndicatorsProcessed = new Map();
 
 function syncOverlayToCanvas(overlay, canvas) {
   if (!overlay || !canvas) return;
-  const wrap = canvas.parentElement;
-  const wrapRect = wrap.getBoundingClientRect();
-  const canvasRect = canvas.getBoundingClientRect();
-  overlay.style.width = `${canvasRect.width}px`;
-  overlay.style.height = `${canvasRect.height}px`;
-  overlay.style.left = `${canvasRect.left - wrapRect.left}px`;
-  overlay.style.top = `${canvasRect.top - wrapRect.top}px`;
+  overlay.style.width = `${canvas.offsetWidth}px`;
+  overlay.style.height = `${canvas.offsetHeight}px`;
+  overlay.style.left = `${canvas.offsetLeft}px`;
+  overlay.style.top = `${canvas.offsetTop}px`;
 }
 
 function syncOverlaySize() {
@@ -1499,29 +1584,181 @@ function renderKeyframeLane() {
   const lane = el.keyframeLane;
   if (!lane) return;
   lane.innerHTML = "";
-  if (!state.trackers.length || !state.duration) {
+  if (!state.trackers.length) {
     lane.classList.remove("visible");
     return;
   }
   lane.classList.add("visible");
+  const dur = state.duration || 0;
   for (let i = 0; i < state.trackers.length; i++) {
     const tracker = state.trackers[i];
-    if (tracker.samples.length < 2) continue;
-    const row = document.createElement("div");
-    row.className = "kf-row";
-    // Thin out ticks: show at most ~200 per tracker
-    const step = Math.max(1, Math.floor(tracker.samples.length / 200));
-    for (let j = 0; j < tracker.samples.length; j += step) {
-      const s = tracker.samples[j];
-      const pct = (s.t / state.duration) * 100;
-      const tick = document.createElement("div");
-      tick.className = "kf-tick";
-      tick.dataset.mode = tracker.mode;
-      tick.style.left = `${pct}%`;
-      row.appendChild(tick);
+    const layer = document.createElement("div");
+    layer.className = "tracker-layer";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "tracker-layer-name";
+    nameEl.textContent = tracker.name;
+    layer.appendChild(nameEl);
+
+    const track = document.createElement("div");
+    track.className = "tracker-layer-track";
+
+    if (dur > 0) {
+      const regions = getOnRegions(tracker);
+      for (const region of regions) {
+        const startPct = (region.start / dur) * 100;
+        const widthPct = ((region.end - region.start) / dur) * 100;
+        if (widthPct < 0.01) continue;
+        const bar = document.createElement("div");
+        bar.className = "tracker-on-bar";
+        bar.dataset.mode = tracker.mode;
+        bar.style.left = `${startPct}%`;
+        bar.style.width = `${widthPct}%`;
+        track.appendChild(bar);
+      }
+
+      // Thin ticks for recorded (non-locked) samples
+      const nonLocked = tracker.samples.filter((s) => !s.locked);
+      if (nonLocked.length >= 2) {
+        const step = Math.max(1, Math.floor(nonLocked.length / 200));
+        for (let j = 0; j < nonLocked.length; j += step) {
+          const s = nonLocked[j];
+          const pct = (s.t / dur) * 100;
+          const tick = document.createElement("div");
+          tick.className = "kf-tick";
+          tick.dataset.mode = tracker.mode;
+          tick.style.left = `${pct}%`;
+          track.appendChild(tick);
+        }
+      }
+
+      // Interactive diamonds for locked position keyframes
+      for (let j = 0; j < tracker.samples.length; j++) {
+        const s = tracker.samples[j];
+        if (!s.locked) continue;
+        const pct = (s.t / dur) * 100;
+        const diamond = document.createElement("div");
+        diamond.className = "kf-diamond";
+        if (state.selectedKeyframe?.trackerIdx === i && state.selectedKeyframe?.type === "position" && state.selectedKeyframe?.idx === j) {
+          diamond.classList.add("selected");
+        }
+        diamond.dataset.trackerIdx = i;
+        diamond.dataset.sampleIdx = j;
+        diamond.dataset.kfType = "position";
+        diamond.style.left = `${pct}%`;
+        track.appendChild(diamond);
+        setupKeyframeDrag(diamond);
+      }
+
+      // Interactive diamonds for on/off keyframes
+      if (tracker.onOff) {
+        for (let j = 0; j < tracker.onOff.length; j++) {
+          const kf = tracker.onOff[j];
+          const pct = (kf.t / dur) * 100;
+          const diamond = document.createElement("div");
+          diamond.className = "kf-diamond kf-diamond-onoff";
+          if (state.selectedKeyframe?.trackerIdx === i && state.selectedKeyframe?.type === "onoff" && state.selectedKeyframe?.idx === j) {
+            diamond.classList.add("selected");
+          }
+          diamond.dataset.trackerIdx = i;
+          diamond.dataset.onoffIdx = j;
+          diamond.dataset.kfType = "onoff";
+          diamond.style.left = `${pct}%`;
+          track.appendChild(diamond);
+          setupKeyframeDrag(diamond);
+        }
+      }
+    } else {
+      const bar = document.createElement("div");
+      bar.className = "tracker-on-bar";
+      bar.dataset.mode = tracker.mode;
+      bar.style.left = "0%";
+      bar.style.width = "100%";
+      track.appendChild(bar);
     }
-    lane.appendChild(row);
+
+    layer.appendChild(track);
+    lane.appendChild(layer);
   }
+}
+
+function setupKeyframeDrag(diamond) {
+  diamond.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const trackerIdx = Number(diamond.dataset.trackerIdx);
+    const kfType = diamond.dataset.kfType;
+    const idx = kfType === "position" ? Number(diamond.dataset.sampleIdx) : Number(diamond.dataset.onoffIdx);
+
+    state.selectedKeyframe = { trackerIdx, type: kfType, idx };
+    document.querySelectorAll(".kf-diamond.selected").forEach((d) => d.classList.remove("selected"));
+    diamond.classList.add("selected");
+
+    diamond.setPointerCapture(e.pointerId);
+    diamond.classList.add("dragging");
+
+    const onMove = (ev) => {
+      const track = diamond.parentElement;
+      const rect = track.getBoundingClientRect();
+      const pct = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
+      diamond.style.left = `${pct * 100}%`;
+    };
+
+    const onUp = (ev) => {
+      diamond.releasePointerCapture(ev.pointerId);
+      diamond.classList.remove("dragging");
+      diamond.removeEventListener("pointermove", onMove);
+      diamond.removeEventListener("pointerup", onUp);
+
+      const track = diamond.parentElement;
+      const rect = track.getBoundingClientRect();
+      const pct = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
+      const newTime = pct * state.duration;
+
+      const tracker = state.trackers[trackerIdx];
+      if (!tracker) return;
+
+      if (kfType === "position" && tracker.samples[idx]) {
+        tracker.samples[idx].t = newTime;
+        tracker.samples.sort((a, b) => a.t - b.t);
+        const newIdx = tracker.samples.indexOf(tracker.samples.find((s) => Math.abs(s.t - newTime) < 0.001 && s.locked));
+        if (newIdx >= 0) state.selectedKeyframe.idx = newIdx;
+      } else if (kfType === "onoff" && tracker.onOff[idx]) {
+        const kfRef = tracker.onOff[idx];
+        kfRef.t = newTime;
+        tracker.onOff.sort((a, b) => a.t - b.t);
+        const newIdx = tracker.onOff.indexOf(kfRef);
+        if (newIdx >= 0) state.selectedKeyframe.idx = newIdx;
+      }
+
+      renderKeyframeLane();
+      syncTrackerUniforms();
+      drawCurrentFrame();
+    };
+
+    diamond.addEventListener("pointermove", onMove);
+    diamond.addEventListener("pointerup", onUp);
+  });
+}
+
+function deleteSelectedKeyframe() {
+  if (!state.selectedKeyframe) return;
+  const { trackerIdx, type, idx } = state.selectedKeyframe;
+  const tracker = state.trackers[trackerIdx];
+  if (!tracker) return;
+
+  if (type === "position") {
+    if (tracker.samples.length <= 1) return;
+    tracker.samples.splice(idx, 1);
+  } else if (type === "onoff") {
+    tracker.onOff.splice(idx, 1);
+  }
+
+  state.selectedKeyframe = null;
+  renderTrackerList();
+  syncTrackerUniforms();
+  drawCurrentFrame();
 }
 
 function updateIndicatorsForOverlay(overlay, indicatorMap, time, draggable) {
@@ -1669,6 +1906,14 @@ function updateTrackerSampleAtCurrentTime(trackerIdx, normX, normY) {
 }
 
 el.trackerList.addEventListener("click", (e) => {
+  // On/off toggle
+  const onoffBtn = e.target.closest("[data-tracker-onoff]");
+  if (onoffBtn) {
+    const idx = Number(onoffBtn.dataset.trackerOnoff);
+    if (Number.isInteger(idx)) toggleTrackerOnOff(idx);
+    return;
+  }
+
   // Mode toggle
   const modeBtn = e.target.closest("[data-tmode]");
   if (modeBtn) {
@@ -1699,8 +1944,9 @@ el.trackerList.addEventListener("input", (e) => {
   if (!input) return;
   const idx = Number(input.dataset.trackerStrength);
   if (!Number.isInteger(idx) || !state.trackers[idx]) return;
-    state.trackers[idx].strength = Number(input.value);
-  renderTrackerList();
+  state.trackers[idx].strength = Number(input.value);
+  const valueEl = input.parentElement?.querySelector(".tracker-strength-value");
+  if (valueEl) valueEl.textContent = Number(input.value).toFixed(2);
   syncTrackerUniforms();
   drawCurrentFrame();
 });
@@ -1899,28 +2145,28 @@ async function startTrackerRecording() {
   state.recording = false;
   el.app.classList.remove("tracker-recording");
 
-  // Interpolate gaps between tracked segments
-  const tracked = [];
-  for (let i = 0; i < samples.length; i++) {
-    const s = samples[i];
-    if (s.x != null) {
-      tracked.push(s);
-    } else {
-      let prevIdx = -1, nextIdx = -1;
-      for (let j = i - 1; j >= 0; j--) { if (samples[j].x != null) { prevIdx = j; break; } }
-      for (let j = i + 1; j < samples.length; j++) { if (samples[j].x != null) { nextIdx = j; break; } }
-      if (prevIdx >= 0 && nextIdx >= 0) {
-        const p = samples[prevIdx], n = samples[nextIdx];
-        const t = (i - prevIdx) / (nextIdx - prevIdx);
-        tracked.push({ t: s.t, x: p.x + (n.x - p.x) * t, y: p.y + (n.y - p.y) * t });
-      } else if (prevIdx >= 0) {
-        tracked.push({ t: s.t, x: samples[prevIdx].x, y: samples[prevIdx].y });
-      }
+  // Build on/off keyframes from mouse state transitions
+  const onOff = [];
+  let wasDown = false;
+  for (const sample of samples) {
+    const isDown = sample.x != null;
+    if (isDown !== wasDown) {
+      onOff.push({ t: sample.t, on: isDown });
+      wasDown = isDown;
     }
   }
 
-  if (tracked.length > 0) {
-    state.trackers.push({ name: `Tracker ${state.trackers.length + 1}`, samples: tracked, mode: "off", strength: 0.25 });
+  // Only keep samples where mouse was down (valid positions)
+  const validSamples = samples.filter((s) => s.x != null);
+
+  if (validSamples.length > 0) {
+    state.trackers.push({
+      name: "Interactive Record Tracker",
+      samples: validSamples,
+      mode: "off",
+      strength: 0.25,
+      onOff,
+    });
   }
 
   renderTrackerList();
@@ -1929,6 +2175,7 @@ async function startTrackerRecording() {
   drawCurrentFrame();
 }
 
+el.addTrackerBtn.addEventListener("click", addStaticTracker);
 el.recordTrackerBtn.addEventListener("click", startTrackerRecording);
 
 // ── Init ──
