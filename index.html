@@ -165,8 +165,8 @@
           <div class="ctrl-section">
             <p class="ctrl-heading">Trackers</p>
             <div class="tracker-btn-group">
-              <button id="add-tracker-btn" class="btn btn-add-tracker" disabled>Add Tracker</button>
-              <button id="record-tracker-btn" class="btn btn-record-tracker" disabled>Record Tracker</button>
+              <button id="add-tracker-btn" class="btn btn-add-tracker" disabled>Add Tween Tracker</button>
+              <button id="record-tracker-btn" class="btn btn-record-tracker" disabled>Add Mouse Tracker</button>
             </div>
             <div id="tracker-list" class="tracker-list"></div>
           </div>
@@ -253,6 +253,11 @@
           <span id="meta-info" class="transport-meta"></span>
 
           <div class="transport-spacer"></div>
+
+          <button id="mute-btn" class="tbtn" title="Mute/Unmute (M)">
+            <svg id="mute-icon-on" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0012 7.5v2a2.5 2.5 0 010 5v2A4.5 4.5 0 0016.5 12zM12 3.2v2.06a7 7 0 010 13.48v2.06A9 9 0 0012 3.2z"/></svg>
+            <svg id="mute-icon-off" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13 3l3.6-3.6-1.4-1.4L15 10.2l-3.2-3.2-1.4 1.4L13.8 12l-3.4 3.6 1.4 1.4L15 13.8l3.2 3.2 1.4-1.4L16.2 12z"/></svg>
+          </button>
         </div>
       </footer>
     </div>
@@ -314,7 +319,7 @@
       <span id="countdown-number" class="countdown-number">3</span>
     </div>
 
-    <video id="source-video" crossorigin="anonymous" playsinline muted hidden></video>
+    <video id="source-video" crossorigin="anonymous" playsinline hidden></video>
     <img id="source-image" crossorigin="anonymous" hidden />
   </body>
 </html>

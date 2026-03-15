@@ -90,6 +90,9 @@ const el = {
   trackerOverlay: document.querySelector("#tracker-overlay"),
   trackerOverlayProcessed: document.querySelector("#tracker-overlay-processed"),
   keyframeLane: document.querySelector("#keyframe-lane"),
+  muteBtn: document.querySelector("#mute-btn"),
+  muteIconOn: document.querySelector("#mute-icon-on"),
+  muteIconOff: document.querySelector("#mute-icon-off"),
 };
 
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
@@ -620,6 +623,9 @@ function clearFrameCache() {
 async function buildFrameCache() {
   clearFrameCache();
 
+  const wasMutedCache = el.sourceVideo.muted;
+  el.sourceVideo.muted = true;
+
   const cacheH = Math.round(CACHE_WIDTH * state.height / state.width);
   const cacheCanvas = document.createElement("canvas");
   cacheCanvas.width = CACHE_WIDTH;
@@ -668,6 +674,8 @@ async function buildFrameCache() {
   await nextPaint();
   await seekVideo(0);
 
+  el.sourceVideo.muted = wasMutedCache;
+  updateMuteUI();
   hideBusy();
 }
 
@@ -835,6 +843,21 @@ document.querySelectorAll(".speed-btn").forEach((btn) => {
   });
 });
 
+// ── Mute ──
+
+function updateMuteUI() {
+  const muted = el.sourceVideo.muted;
+  el.muteIconOn.style.display = muted ? "none" : "";
+  el.muteIconOff.style.display = muted ? "" : "none";
+}
+
+el.muteBtn.addEventListener("click", () => {
+  el.sourceVideo.muted = !el.sourceVideo.muted;
+  updateMuteUI();
+});
+
+updateMuteUI();
+
 // ── Buffer ──
 
 function resetBuffer() {
@@ -852,10 +875,15 @@ async function loadVideo(file) {
   await pausePlayback();
   resetBuffer();
   clearFrameCache();
+  state.trackers = [];
+  state._activeTrackers = [];
   state.sampledColors = [];
   state.keyMode = "auto";
   state.samplingActive = false;
   state.viewMode = "composite";
+  renderTrackerList();
+  el.processedCanvas.getContext("2d", { alpha: true }).clearRect(0, 0, el.processedCanvas.width, el.processedCanvas.height);
+  sourceCtx.clearRect(0, 0, state.width, state.height);
   if (state.sourceUrl) { URL.revokeObjectURL(state.sourceUrl); state.sourceUrl = null; }
 
   el.sourceImage.removeAttribute("src");
@@ -896,10 +924,15 @@ async function loadImage(file) {
   await pausePlayback();
   resetBuffer();
   clearFrameCache();
+  state.trackers = [];
+  state._activeTrackers = [];
   state.sampledColors = [];
   state.keyMode = "auto";
   state.samplingActive = false;
   state.viewMode = "composite";
+  renderTrackerList();
+  el.processedCanvas.getContext("2d", { alpha: true }).clearRect(0, 0, el.processedCanvas.width, el.processedCanvas.height);
+  sourceCtx.clearRect(0, 0, state.width, state.height);
   if (state.sourceUrl) { URL.revokeObjectURL(state.sourceUrl); state.sourceUrl = null; }
 
   el.sourceVideo.removeAttribute("src");
@@ -1027,6 +1060,9 @@ async function processVideo() {
 
   await pausePlayback();
   resetBuffer();
+  const wasMuted = el.sourceVideo.muted;
+  el.sourceVideo.muted = true;
+  updateMuteUI();
   state.processing = true;
   state.abortProcessing = false;
   updateButtons();
@@ -1199,6 +1235,8 @@ async function processVideo() {
     try { matteEncoder.close(); } catch { /* */ }
     state.processing = false;
     state.abortProcessing = false;
+    el.sourceVideo.muted = wasMuted;
+    updateMuteUI();
     hideBusy();
     updateButtons();
     drawCurrentFrame();
@@ -1377,12 +1415,18 @@ el.sampleSwatches.addEventListener("click", (event) => {
 });
 
 window.addEventListener("keydown", (e) => {
-  const tag = document.activeElement?.tagName?.toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || document.activeElement?.classList.contains('noUi-handle')) return;
+  const ae = document.activeElement;
+  const tag = ae?.tagName?.toLowerCase();
+  const isTextInput = tag === 'textarea' || (tag === 'input' && ae.type !== 'range');
+  if (isTextInput) return;
 
   if (e.code === "Space") {
     e.preventDefault();
+    if (ae && ae !== document.body) ae.blur();
     togglePlayback();
+  } else if (e.code === "KeyM") {
+    el.sourceVideo.muted = !el.sourceVideo.muted;
+    updateMuteUI();
   } else if (e.code === "ArrowLeft") {
     e.preventDefault();
     stepFrame(e.shiftKey ? -10 : -1);
@@ -1513,7 +1557,7 @@ function getOnRegions(tracker) {
 function addStaticTracker() {
   if (!state.sourceUrl) return;
   const tracker = {
-    name: `Tracker ${state.trackers.length + 1}`,
+    name: `Tracker`,
     samples: [{ t: 0, x: 0.5, y: 0.5, locked: true }],
     mode: "off",
     strength: 0.25,
@@ -1557,14 +1601,22 @@ function renderTrackerList() {
     .map((t, i) => {
       const isOn = isTrackerOnAtTime(t, curTime);
       return `<div class="tracker-item">
-        <span class="tracker-item-name"><span class="tracker-dot"></span>${t.name}</span>
-        <div class="tracker-mode-group">
-          <button class="tracker-onoff-btn ${isOn ? "on" : ""}" data-tracker-onoff="${i}" title="${isOn ? "Set OFF at current time" : "Set ON at current time"}">&#x23FB;</button>
-          <input class="tracker-strength" type="range" min="0.02" max="0.5" step="0.01" value="${(t.strength ?? 0.25).toFixed(2)}" data-tracker-strength="${i}" title="Strength" />
-          <span class="tracker-strength-value">${(t.strength ?? 0.25).toFixed(2)}</span>
-          <button class="tracker-mode-btn ${t.mode === "keep" ? "active keep" : ""}" data-tracker-idx="${i}" data-tmode="keep" title="Keep region">K</button>
-          <button class="tracker-mode-btn ${t.mode === "discard" ? "active discard" : ""}" data-tracker-idx="${i}" data-tmode="discard" title="Discard region">D</button>
-          <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
+        <div class="tracker-row">
+          <span class="tracker-item-name"><span class="tracker-dot"></span>Tracker ${i + 1}</span>
+          <div class="tracker-row-right">
+            <button class="tracker-onoff-btn ${isOn ? "on" : ""}" data-tracker-onoff="${i}" title="${isOn ? "Set OFF at current time" : "Set ON at current time"}">&#x23FB;</button>
+            <button class="tracker-mode-btn ${t.mode === "keep" ? "active keep" : ""}" data-tracker-idx="${i}" data-tmode="keep" title="Keep region">Keep</button>
+            <button class="tracker-mode-btn ${t.mode === "discard" ? "active discard" : ""}" data-tracker-idx="${i}" data-tmode="discard" title="Discard region">Discard</button>
+            <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
+          </div>
+        </div>
+        <div class="tracker-row">
+          <span class="tracker-row-label">Tolerance</span>
+          <input class="tracker-strength" type="range" min="0.02" max="0.999" step="0.001" value="${(t.strength ?? 0.25).toFixed(3)}" data-tracker-strength="${i}" title="Tolerance" />
+          <span class="tracker-strength-value">${(t.strength ?? 0.25).toFixed(3)}</span>
+        </div>
+        <div class="tracker-row">
+          <button class="tracker-auto-discard-btn ${t.autoInvert ? "active" : ""}" data-tracker-autoinvert="${i}" title="Invert remaining: Keep→discard outside, Discard→keep outside">Auto invert remaining</button>
         </div>
       </div>`;
     })
@@ -1607,7 +1659,7 @@ function getActiveTrackersAt(time) {
   for (const tracker of state.trackers) {
     if (tracker.mode === "off" || !tracker.samples.length) continue;
     const pos = getTrackerPositionAtTime(tracker, time);
-    if (pos) active.push({ x: pos.x, y: pos.y, mode: tracker.mode, strength: tracker.strength ?? 0.25 });
+    if (pos) active.push({ x: pos.x, y: pos.y, mode: tracker.mode, strength: tracker.strength ?? 0.25, autoInvert: !!tracker.autoInvert });
     if (active.length >= 4) break;
   }
   return active;
@@ -1928,12 +1980,12 @@ function updateTrackerIndicators(timeOverride) {
 
   const time = timeOverride != null ? timeOverride : (state.isImage ? 0 : (el.sourceVideo ? el.sourceVideo.currentTime : 0));
   updateIndicatorsForOverlay(srcOverlay, trackerIndicators, time, true);
-  updateIndicatorsForOverlay(procOverlay, trackerIndicatorsProcessed, time, false);
+  updateIndicatorsForOverlay(procOverlay, trackerIndicatorsProcessed, time, true);
 }
 
 function setupIndicatorDrag(indicatorEl, trackerIdx) {
   const moveToPointer = (e) => {
-    const overlay = el.trackerOverlay;
+    const overlay = indicatorEl.parentElement;
     const rect = overlay.getBoundingClientRect();
     const normX = clamp((e.clientX - rect.left) / rect.width, 0, 1);
     const normY = clamp((e.clientY - rect.top) / rect.height, 0, 1);
@@ -2010,6 +2062,19 @@ el.trackerList.addEventListener("click", (e) => {
     return;
   }
 
+  // Auto invert toggle
+  const autoBtn = e.target.closest("[data-tracker-autoinvert]");
+  if (autoBtn) {
+    const idx = Number(autoBtn.dataset.trackerAutoinvert);
+    if (Number.isInteger(idx) && state.trackers[idx]) {
+      state.trackers[idx].autoInvert = !state.trackers[idx].autoInvert;
+      renderTrackerList();
+      syncTrackerUniforms();
+      drawCurrentFrame();
+    }
+    return;
+  }
+
   // Mode toggle
   const modeBtn = e.target.closest("[data-tmode]");
   if (modeBtn) {
@@ -2042,7 +2107,7 @@ el.trackerList.addEventListener("input", (e) => {
   if (!Number.isInteger(idx) || !state.trackers[idx]) return;
   state.trackers[idx].strength = Number(input.value);
   const valueEl = input.parentElement?.querySelector(".tracker-strength-value");
-  if (valueEl) valueEl.textContent = Number(input.value).toFixed(2);
+  if (valueEl) valueEl.textContent = Number(input.value).toFixed(3);
   syncTrackerUniforms();
   drawCurrentFrame();
 });
@@ -2164,7 +2229,6 @@ async function startTrackerRecording() {
 
   await seekVideo(0);
   el.sourceVideo.playbackRate = 0.5;
-  el.sourceVideo.muted = false;
   drawCurrentFrame();
 
   const samples = [];
@@ -2257,7 +2321,7 @@ async function startTrackerRecording() {
 
   if (validSamples.length > 0) {
     state.trackers.push({
-      name: "Interactive Record Tracker",
+      name: `Tracker`,
       samples: validSamples,
       mode: "off",
       strength: 0.25,
@@ -2292,7 +2356,6 @@ async function loadDemoFile() {
     const res = await fetch("/input.mp4");
     const blob = await res.blob();
     await handleFile(new File([blob], "input.mp4", { type: "video/mp4" }));
-    el.sourceVideo.muted = false;
     togglePlayback();
   } catch (e) {
     console.error("Demo load failed:", e);

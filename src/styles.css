@@ -1385,15 +1385,34 @@ html, body {
 
 .tracker-item {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 8px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
   border-radius: var(--r-sm);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   color: var(--text);
+}
+
+.tracker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.tracker-row-right {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.tracker-row-label {
+  font-size: 10px;
+  color: var(--muted);
+  min-width: 52px;
 }
 
 .tracker-item-name {
@@ -1409,14 +1428,34 @@ html, body {
   background: var(--accent);
 }
 
-.tracker-mode-group {
-  display: flex;
-  gap: 3px;
-  align-items: center;
+.tracker-auto-discard-btn {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 100ms;
+  text-align: center;
+}
+
+.tracker-auto-discard-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text);
+}
+
+.tracker-auto-discard-btn.active {
+  color: #1a1a00;
+  background: rgba(230, 220, 60, 0.7);
+  border-color: rgba(230, 220, 60, 0.5);
 }
 
 .tracker-strength {
-  width: 72px;
+  flex: 1;
+  min-width: 0;
   accent-color: var(--accent);
 }
 
@@ -1429,9 +1468,8 @@ html, body {
 }
 
 .tracker-mode-btn {
-  width: 22px;
   height: 22px;
-  padding: 0;
+  padding: 0 6px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--r-sm);
   background: transparent;
