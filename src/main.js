@@ -8,6 +8,7 @@ import { Muxer, ArrayBufferTarget } from "webm-muxer";
 import { CurveEditor } from "./curveEditor.js";
 import { detectExportSupport } from "./export.js";
 import { ChromaKeyRenderer } from "./shaderPipeline.js";
+import { applyTrackerFloodFill } from "./trackerFloodFill.js";
 import {
   clamp,
   estimateFrameCount,
@@ -132,6 +133,7 @@ const state = {
   frameCache: [],
   trackers: [],
   recording: false,
+  _activeTrackers: [],
   selectedKeyframe: null,
 };
 
@@ -552,7 +554,16 @@ function scrubTo(ratio) {
       sourceCtx.clearRect(0, 0, state.width, state.height);
       sourceCtx.drawImage(frame.bitmap, 0, 0, state.width, state.height);
       syncTrackerUniformsAt(scrubTime);
-      renderer.renderPreviewFromCanvas(el.sourceCanvas);
+      const active = state._activeTrackers || [];
+      const needsFloodFill = active.length > 0;
+      const isAlphaView = state.viewMode === "alpha";
+      if (needsFloodFill && isAlphaView) {
+        renderer.renderPreviewFromCanvas(el.sourceCanvas, { viewModeOverride: 0 });
+        applyTrackerFloodFillToCanvas(el.processedCanvas, active, true);
+      } else {
+        renderer.renderPreviewFromCanvas(el.sourceCanvas);
+        applyTrackerFloodFillToCanvas(el.processedCanvas, active, false);
+      }
       drawTrackerOverlays(scrubTime);
       updateTrackerIndicators(scrubTime);
     }
@@ -761,7 +772,17 @@ function drawCurrentFrame() {
   if (!state.sourceUrl) return;
   syncTrackerUniforms();
   drawSourceFrame();
-  renderer.renderPreview();
+  const active = state._activeTrackers || [];
+  const needsFloodFill = active.length > 0;
+  const isAlphaView = state.viewMode === "alpha";
+  if (needsFloodFill && isAlphaView) {
+    // Render composite first so we get real alpha, then flood fill + convert to alpha view
+    renderer.renderPreview({ viewModeOverride: 0 });
+    applyTrackerFloodFillToCanvas(el.processedCanvas, active, true);
+  } else {
+    renderer.renderPreview();
+    applyTrackerFloodFillToCanvas(el.processedCanvas, active, false);
+  }
   updateTrackerIndicators();
   if (!state.isImage) updateTimeline(el.sourceVideo.currentTime);
 }
@@ -1077,10 +1098,25 @@ async function processVideo() {
     drawSourceFrame();
     const keyFrame = frameIndex % keyInterval === 0;
 
+    syncTrackerUniforms();
     renderer.renderInto(colorCanvas, { alphaBackground: true, viewModeOverride: 0 });
+    applyTrackerFloodFillToCanvas(colorCanvas, state._activeTrackers || []);
     if (hasRequestFrame) colorTrack.requestFrame();
 
-    renderer.renderInto(renderCanvas, { alphaBackground: false, viewModeOverride: 1 });
+    // Derive matte from the flood-filled color canvas alpha
+    const matteCtx = renderCanvas.getContext("2d", { alpha: true });
+    const colorCtxExport = colorCanvas.getContext("2d", { alpha: true });
+    const colorData = colorCtxExport.getImageData(0, 0, width, height);
+    matteCtx.clearRect(0, 0, width, height);
+    const matteData = matteCtx.createImageData(width, height);
+    for (let i = 0; i < colorData.data.length; i += 4) {
+      const a = colorData.data[i + 3];
+      matteData.data[i] = a;
+      matteData.data[i + 1] = a;
+      matteData.data[i + 2] = a;
+      matteData.data[i + 3] = 255;
+    }
+    matteCtx.putImageData(matteData, 0, 0);
     const mf = new VideoFrame(renderCanvas, { timestamp: timestampUs, alpha: "discard" });
     matteEncoder.encode(mf, { keyFrame });
     mf.close();
@@ -1190,11 +1226,25 @@ async function exportVideo({ alpha }) {
 function exportImagePng({ matte }) {
   if (!state.sourceUrl || !state.isImage) return;
   drawSourceFrame();
+  syncTrackerUniforms();
   const canvas = document.createElement("canvas");
   canvas.width = state.width;
   canvas.height = state.height;
-  // matte = true → render B&W alpha matte (viewMode 1), matte = false → composite with alpha (viewMode 0)
-  renderer.renderInto(canvas, { alphaBackground: !matte, viewModeOverride: matte ? 1 : 0 });
+  renderer.renderInto(canvas, { alphaBackground: true, viewModeOverride: 0 });
+  applyTrackerFloodFillToCanvas(canvas, state._activeTrackers || []);
+  if (matte) {
+    // Convert alpha to grayscale RGB
+    const ctx = canvas.getContext("2d", { alpha: true });
+    const imgData = ctx.getImageData(0, 0, state.width, state.height);
+    for (let i = 0; i < imgData.data.length; i += 4) {
+      const a = imgData.data[i + 3];
+      imgData.data[i] = a;
+      imgData.data[i + 1] = a;
+      imgData.data[i + 2] = a;
+      imgData.data[i + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
   const safeName = (state.sourceName || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9\-_]+/gi, "_").toLowerCase();
   canvas.toBlob((blob) => {
     if (!blob) return;
@@ -1552,15 +1602,37 @@ function getTrackerPositionAtTime(tracker, time) {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, exact: false };
 }
 
-function syncTrackerUniformsAt(time) {
+function getActiveTrackersAt(time) {
   const active = [];
   for (const tracker of state.trackers) {
     if (tracker.mode === "off" || !tracker.samples.length) continue;
     const pos = getTrackerPositionAtTime(tracker, time);
-    if (pos) active.push({ x: pos.x, y: 1.0 - pos.y, mode: tracker.mode, strength: tracker.strength ?? 0.25 });
+    if (pos) active.push({ x: pos.x, y: pos.y, mode: tracker.mode, strength: tracker.strength ?? 0.25 });
     if (active.length >= 4) break;
   }
-  renderer.updateTrackers(active, 0.15);
+  return active;
+}
+
+function applyTrackerFloodFillToCanvas(canvas, trackers, showAsAlpha) {
+  if (!trackers.length && !showAsAlpha) return;
+  const ctx = canvas.getContext("2d", { alpha: true });
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (trackers.length) applyTrackerFloodFill(imageData, trackers);
+  if (showAsAlpha) {
+    const d = imageData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      d[i] = a;
+      d[i + 1] = a;
+      d[i + 2] = a;
+      d[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function syncTrackerUniformsAt(time) {
+  state._activeTrackers = getActiveTrackersAt(time);
 }
 
 function syncTrackerUniforms() {

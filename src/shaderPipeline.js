@@ -26,12 +26,6 @@ uniform vec2 uHueRange;
 uniform float uSatFloor;
 uniform vec2 uLightRange;
 uniform float uDespillDepth;
-uniform vec2 uTrackerPositions[4];
-uniform float uTrackerModes[4];
-uniform float uTrackerStrengths[4];
-uniform float uTrackerCount;
-uniform float uTrackerThreshold;
-
 varying vec2 vUv;
 
 float quickKeyAlpha(vec2 uv) {
@@ -163,76 +157,13 @@ float applyFeather(vec2 uv, float alpha) {
   return total / 9.0;
 }
 
-float alphaSimilarity(float a, float b, float strength) {
-  return 1.0 - smoothstep(strength, strength * 2.0, abs(a - b));
-}
-
-// Fixed number of steps per segment so connectivity does not depend on distance (no fake radial).
-// Same step density for near and far pixels = true contiguous region, not a distance falloff.
-float pathConfidence(vec2 fromUv, vec2 toUv, float strength) {
-  const float steps = 64.0;
-  float pathMin = 1.0;
-  vec2 prevUv = fromUv;
-  for (float s = 1.0; s <= 64.0; s += 1.0) {
-    vec2 currUv = mix(fromUv, toUv, s / steps);
-    float prevA = quickKeyAlpha(prevUv);
-    float currA = quickKeyAlpha(currUv);
-    pathMin = min(pathMin, alphaSimilarity(prevA, currA, strength));
-    prevUv = currUv;
-  }
-  return smoothstep(0.2, 0.8, pathMin);
-}
-
-// Flood-fill style: pixel is connected if ANY path from tracker is contiguous
-// (direct or L-shaped), so we don't get a single-ray "cone" / radial falloff.
-float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float strength, float mode) {
-  float refAlpha   = quickKeyAlpha(trackerUv);
-  float pixelAlpha = quickKeyAlpha(pixelUv);
-  float edge = max(strength * 0.35, 0.02);
-
-  float inRange = 0.0;
-  if (mode > 0.5) {
-    float cutoff = refAlpha - strength;
-    inRange = smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
-  } else {
-    float cutoff = refAlpha + strength;
-    inRange = 1.0 - smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
-  }
-
-  if (inRange < 0.01) return 0.0;
-
-  // Multiple routes: direct, L via (pixel.x, tracker.y), L via (tracker.x, pixel.y)
-  vec2 viaX = vec2(pixelUv.x, trackerUv.y);
-  vec2 viaY = vec2(trackerUv.x, pixelUv.y);
-  float cDirect = pathConfidence(trackerUv, pixelUv, strength);
-  float cViaX   = min(pathConfidence(trackerUv, viaX, strength), pathConfidence(viaX, pixelUv, strength));
-  float cViaY   = min(pathConfidence(trackerUv, viaY, strength), pathConfidence(viaY, pixelUv, strength));
-  float pathConf = max(cDirect, max(cViaX, cViaY));
-
-  return inRange * pathConf;
-}
-
 void main() {
   vec4 sampleColor = texture2D(uTexture, vUv);
 
-  // 1. Choke + Feather FIRST
+  // 1. Choke + Feather
   float alpha = computeChokedAlphaAt(vUv);
   alpha = applyFeather(vUv, alpha);
   alpha = clamp(alpha, 0.0, 1.0);
-
-  // 2. Apply tracker keep/discard masks
-  for (int i = 0; i < 4; i++) {
-    if (float(i) >= uTrackerCount) break;
-    float mode = uTrackerModes[i];
-    float strength = max(uTrackerStrengths[i], 0.001);
-    if (abs(mode) < 0.5) continue;
-    float conn = trackerConnectivity(vUv, uTrackerPositions[i], strength, mode);
-    if (mode > 0.5) {
-      alpha = mix(alpha, 1.0, conn);
-    } else {
-      alpha = mix(alpha, 0.0, conn);
-    }
-  }
 
   if (uViewMode > 1.5) {
     gl_FragColor = vec4(sampleColor.rgb, 1.0);
@@ -316,11 +247,6 @@ export class ChromaKeyRenderer {
       uKeyColors: { value: Array.from({ length: 5 }, () => new THREE.Vector3(0, 1, 0)) },
       uTexelSize: { value: new THREE.Vector2(1 / this.size.width, 1 / this.size.height) },
       uDespillDepth: { value: 5 },
-      uTrackerPositions: { value: Array.from({ length: 4 }, () => new THREE.Vector2(0, 0)) },
-      uTrackerModes: { value: new Float32Array(4) },
-      uTrackerStrengths: { value: new Float32Array([0.15, 0.15, 0.15, 0.15]) },
-      uTrackerCount: { value: 0 },
-      uTrackerThreshold: { value: 0.15 },
       uHueRange: { value: new THREE.Vector2(80, 160) },
       uSatFloor: { value: 0.15 },
       uLightRange: { value: new THREE.Vector2(0.05, 0.95) },
@@ -376,23 +302,6 @@ export class ChromaKeyRenderer {
     this.imageTexture.needsUpdate = true;
 
     this.uniforms.uTexture.value = this.imageTexture;
-  }
-
-  updateTrackers(trackers, threshold) {
-    const count = Math.min(trackers.length, 4);
-    this.uniforms.uTrackerCount.value = count;
-    this.uniforms.uTrackerThreshold.value = threshold ?? 0.15;
-    for (let i = 0; i < 4; i++) {
-      if (i < count) {
-        this.uniforms.uTrackerPositions.value[i].set(trackers[i].x, trackers[i].y);
-        this.uniforms.uTrackerModes.value[i] = trackers[i].mode === "keep" ? 1 : trackers[i].mode === "discard" ? -1 : 0;
-        this.uniforms.uTrackerStrengths.value[i] = trackers[i].strength ?? 0.15;
-      } else {
-        this.uniforms.uTrackerPositions.value[i].set(0, 0);
-        this.uniforms.uTrackerModes.value[i] = 0;
-        this.uniforms.uTrackerStrengths.value[i] = 0.15;
-      }
-    }
   }
 
   setSize(width, height) {
