@@ -729,6 +729,7 @@ function drawTrackerOverlays() {
 
 function drawCurrentFrame() {
   if (!state.sourceUrl) return;
+  syncTrackerUniforms();
   drawSourceFrame();
   renderer.renderPreview();
   if (!state.isImage) updateTimeline(el.sourceVideo.currentTime);
@@ -1392,20 +1393,67 @@ function renderTrackerList() {
   el.trackerList.innerHTML = state.trackers
     .map((t, i) =>
       `<div class="tracker-item">
-        <span class="tracker-item-name"><span class="tracker-dot"></span>${t.name} (${t.samples.length} pts)</span>
-        <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
+        <span class="tracker-item-name"><span class="tracker-dot"></span>${t.name}</span>
+        <div class="tracker-mode-group">
+          <button class="tracker-mode-btn ${t.mode === "keep" ? "active keep" : ""}" data-tracker-idx="${i}" data-tmode="keep" title="Keep region">K</button>
+          <button class="tracker-mode-btn ${t.mode === "discard" ? "active discard" : ""}" data-tracker-idx="${i}" data-tmode="discard" title="Discard region">D</button>
+          <button class="tracker-delete" data-tracker-index="${i}" title="Delete">&times;</button>
+        </div>
       </div>`,
     )
     .join("");
 }
 
+function getTrackerPositionAtTime(tracker, time) {
+  const s = tracker.samples;
+  if (!s.length) return null;
+  if (time <= s[0].t) return { x: s[0].x, y: s[0].y };
+  if (time >= s[s.length - 1].t) return { x: s[s.length - 1].x, y: s[s.length - 1].y };
+  let lo = 0, hi = s.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (s[mid].t <= time) lo = mid; else hi = mid;
+  }
+  const a = s[lo], b = s[hi];
+  const t = (time - a.t) / (b.t - a.t);
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function syncTrackerUniforms() {
+  const time = state.isImage ? 0 : el.sourceVideo.currentTime;
+  const active = [];
+  for (const tracker of state.trackers) {
+    if (tracker.mode === "off" || !tracker.samples.length) continue;
+    const pos = getTrackerPositionAtTime(tracker, time);
+    if (pos) active.push({ x: pos.x, y: 1.0 - pos.y, mode: tracker.mode });
+    if (active.length >= 4) break;
+  }
+  renderer.updateTrackers(active, 0.15);
+}
+
 el.trackerList.addEventListener("click", (e) => {
-  const btn = e.target.closest("[data-tracker-index]");
-  if (!btn) return;
-  const idx = Number(btn.dataset.trackerIndex);
+  // Mode toggle
+  const modeBtn = e.target.closest("[data-tmode]");
+  if (modeBtn) {
+    const idx = Number(modeBtn.dataset.trackerIdx);
+    const mode = modeBtn.dataset.tmode;
+    if (Number.isInteger(idx) && state.trackers[idx]) {
+      state.trackers[idx].mode = state.trackers[idx].mode === mode ? "off" : mode;
+      renderTrackerList();
+      syncTrackerUniforms();
+      drawCurrentFrame();
+    }
+    return;
+  }
+
+  // Delete
+  const delBtn = e.target.closest("[data-tracker-index]");
+  if (!delBtn) return;
+  const idx = Number(delBtn.dataset.trackerIndex);
   if (!Number.isInteger(idx)) return;
   state.trackers.splice(idx, 1);
   renderTrackerList();
+  syncTrackerUniforms();
   drawCurrentFrame();
 });
 
@@ -1624,7 +1672,7 @@ async function startTrackerRecording() {
   }
 
   if (tracked.length > 0) {
-    state.trackers.push({ name: `Tracker ${state.trackers.length + 1}`, samples: tracked });
+    state.trackers.push({ name: `Tracker ${state.trackers.length + 1}`, samples: tracked, mode: "off" });
   }
 
   renderTrackerList();

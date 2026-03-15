@@ -1215,6 +1215,44 @@ html, body {
   background: var(--accent);
 }
 
+.tracker-mode-group {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.tracker-mode-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 100ms;
+}
+
+.tracker-mode-btn:hover {
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text);
+}
+
+.tracker-mode-btn.active.keep {
+  color: #0a1a10;
+  background: rgba(114, 255, 159, 0.85);
+  border-color: rgba(114, 255, 159, 0.7);
+}
+
+.tracker-mode-btn.active.discard {
+  color: #fff;
+  background: rgba(255, 80, 80, 0.7);
+  border-color: rgba(255, 80, 80, 0.6);
+}
+
 .tracker-delete {
   background: none;
   border: none;

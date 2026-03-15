@@ -26,6 +26,10 @@ uniform vec2 uHueRange;
 uniform float uSatFloor;
 uniform vec2 uLightRange;
 uniform float uDespillDepth;
+uniform vec2 uTrackerPositions[4];
+uniform float uTrackerModes[4];
+uniform float uTrackerCount;
+uniform float uTrackerThreshold;
 
 varying vec2 vUv;
 
@@ -193,6 +197,31 @@ float applyFeather(vec2 uv, float alpha) {
   return total / 9.0;
 }
 
+float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float mode) {
+  float trackerAlpha = quickKeyAlpha(trackerUv);
+  float pixelAlpha = quickKeyAlpha(pixelUv);
+
+  float steps = 16.0;
+
+  if (mode > 0.5) {
+    // Keep: path must stay opaque. Check min alpha along ray + pixel itself.
+    float minPath = trackerAlpha;
+    for (float s = 1.0; s <= 16.0; s += 1.0) {
+      minPath = min(minPath, quickKeyAlpha(mix(trackerUv, pixelUv, s / steps)));
+    }
+    return smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, minPath)
+         * smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, pixelAlpha);
+  } else {
+    // Discard: path must stay transparent. Check max alpha along ray + pixel itself.
+    float maxPath = trackerAlpha;
+    for (float s = 1.0; s <= 16.0; s += 1.0) {
+      maxPath = max(maxPath, quickKeyAlpha(mix(trackerUv, pixelUv, s / steps)));
+    }
+    return (1.0 - smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, maxPath))
+         * (1.0 - smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, pixelAlpha));
+  }
+}
+
 void main() {
   vec4 sampleColor = texture2D(uTexture, vUv);
 
@@ -201,12 +230,25 @@ void main() {
   alpha = applyFeather(vUv, alpha);
   alpha = clamp(alpha, 0.0, 1.0);
 
+  // 2. Apply tracker keep/discard masks
+  for (int i = 0; i < 4; i++) {
+    if (float(i) >= uTrackerCount) break;
+    float mode = uTrackerModes[i];
+    if (abs(mode) < 0.5) continue;
+    float conn = trackerConnectivity(vUv, uTrackerPositions[i], mode);
+    if (mode > 0.5) {
+      alpha = mix(alpha, 1.0, conn);
+    } else {
+      alpha = mix(alpha, 0.0, conn);
+    }
+  }
+
   if (uViewMode > 1.5) {
     gl_FragColor = vec4(sampleColor.rgb, 1.0);
     return;
   }
 
-  // 2. Despill SECOND — uses choked alpha for edge proximity
+  // 3. Despill — uses choked alpha for edge proximity
   float spillAmount = max(sampleColor.g - max(sampleColor.r, sampleColor.b), 0.0);
   float spillFactor = 1.0 - smoothstep(0.0, max(uSpillSuppression, 0.0001), spillAmount);
   float edgeProximity = 1.0 - alpha;
@@ -284,6 +326,10 @@ export class ChromaKeyRenderer {
       uKeyColors: { value: Array.from({ length: 5 }, () => new THREE.Vector3(0, 1, 0)) },
       uTexelSize: { value: new THREE.Vector2(1 / this.size.width, 1 / this.size.height) },
       uDespillDepth: { value: 0 },
+      uTrackerPositions: { value: Array.from({ length: 4 }, () => new THREE.Vector2(0, 0)) },
+      uTrackerModes: { value: new Float32Array(4) },
+      uTrackerCount: { value: 0 },
+      uTrackerThreshold: { value: 0.15 },
       uHueRange: { value: new THREE.Vector2(80, 160) },
       uSatFloor: { value: 0.15 },
       uLightRange: { value: new THREE.Vector2(0.05, 0.95) },
@@ -339,6 +385,21 @@ export class ChromaKeyRenderer {
     this.imageTexture.needsUpdate = true;
 
     this.uniforms.uTexture.value = this.imageTexture;
+  }
+
+  updateTrackers(trackers, threshold) {
+    const count = Math.min(trackers.length, 4);
+    this.uniforms.uTrackerCount.value = count;
+    this.uniforms.uTrackerThreshold.value = threshold ?? 0.15;
+    for (let i = 0; i < 4; i++) {
+      if (i < count) {
+        this.uniforms.uTrackerPositions.value[i].set(trackers[i].x, trackers[i].y);
+        this.uniforms.uTrackerModes.value[i] = trackers[i].mode === "keep" ? 1 : trackers[i].mode === "discard" ? -1 : 0;
+      } else {
+        this.uniforms.uTrackerPositions.value[i].set(0, 0);
+        this.uniforms.uTrackerModes.value[i] = 0;
+      }
+    }
   }
 
   setSize(width, height) {
