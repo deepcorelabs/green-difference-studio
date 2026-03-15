@@ -13,29 +13,42 @@
     <div class="app">
 
       <header class="topbar">
-        <h1>Green Difference Studio</h1>
-        <div class="topbar-right">
+        <div class="topbar-left">
+          <h1>Green Difference Studio</h1>
+        </div>
+        <div class="topbar-center">
           <span id="video-name" class="topbar-file"></span>
-          <div class="tooltip-wrap" id="wrap-export-webm" data-tip="Process frames first to enable export.">
-            <button id="export-webm-button" class="btn" disabled>Export WebM</button>
+        </div>
+        <div class="topbar-right">
+          <div class="process-group">
+            <span class="process-status" id="process-status-text">0 frames</span>
+            <div class="process-meter"><div id="processing-fill" class="process-meter-fill"></div></div>
+            <button id="process-button" class="btn btn-process" disabled>Process Frames</button>
           </div>
-          <div class="tooltip-wrap" id="wrap-export-alpha" data-tip="Process frames first to enable export.">
-            <button id="export-alpha-button" class="btn" disabled>Export Alpha WebM</button>
-          </div>
-          <div class="tooltip-wrap" id="wrap-export-png" data-tip="" hidden>
-            <button id="export-png-button" class="btn" disabled>Download PNG</button>
-          </div>
-          <div class="tooltip-wrap" id="wrap-export-alpha-png" data-tip="" hidden>
-            <button id="export-alpha-png-button" class="btn" disabled>Download Alpha PNG</button>
+
+          <div class="export-dropdown-wrap">
+            <button id="export-trigger" class="btn btn-export-trigger" disabled>
+              Export
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 7L8 3.5Z"/></svg>
+            </button>
+            <div class="export-dropdown" id="export-dropdown">
+              <button id="export-webm-button" class="export-item" disabled>Color WebM</button>
+              <button id="export-alpha-button" class="export-item" disabled>Matte WebM</button>
+              <button id="export-png-button" class="export-item" disabled hidden>Download PNG</button>
+              <button id="export-alpha-png-button" class="export-item" disabled hidden>Download Alpha PNG</button>
+            </div>
           </div>
         </div>
       </header>
 
       <div class="workspace">
         <div class="stage">
-          <label class="viewer" id="source-drop-zone" for="video-input">
+          <div class="viewer" id="source-drop-zone">
             <input id="video-input" type="file" accept="video/*,image/*" hidden />
             <div class="viewer-head">
+              <div class="viewer-tools viewer-tools-left">
+                <button id="replace-media-button" class="view-btn">Replace Media</button>
+              </div>
               <span class="viewer-label">Original</span>
             </div>
             <div class="viewer-wrap">
@@ -44,9 +57,9 @@
             <div id="drop-hint" class="drop-hint">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
               <strong>Drop video or image here</strong>
-              <span>or click to browse</span>
+              <span>or use Replace Media</span>
             </div>
-          </label>
+          </div>
 
           <div class="viewer" id="processed-viewer">
             <div class="viewer-head">
@@ -163,6 +176,9 @@
           </div>
         </div>
         <div class="transport">
+          <button id="go-to-start" class="tbtn" disabled title="Go to start (Home)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>
+          </button>
           <button id="step-backward" class="tbtn" disabled title="Previous frame (Left Arrow)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
           </button>
@@ -173,6 +189,9 @@
           </button>
           <button id="step-forward" class="tbtn" disabled title="Next frame (Right Arrow)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+          </button>
+          <button id="loop-toggle" class="tbtn tbtn-loop" disabled title="Toggle loop (L)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
           </button>
 
           <div class="transport-time">
@@ -191,21 +210,18 @@
           <span id="meta-info" class="transport-meta"></span>
 
           <div class="transport-spacer"></div>
-
-          <div class="process-group">
-            <span class="process-status" id="process-status-text">0 / 0 frames</span>
-            <div class="process-meter"><div id="processing-fill" class="process-meter-fill"></div></div>
-            <button id="process-button" class="btn btn-process" disabled>Process Frames</button>
-          </div>
         </div>
       </footer>
     </div>
 
     <div id="busy-overlay" class="busy-overlay" hidden>
       <div class="busy-card">
-        <div class="spinner"></div>
         <strong id="busy-title">Processing...</strong>
+        <div class="busy-progress-track">
+          <div id="busy-progress-fill" class="busy-progress-fill"></div>
+        </div>
         <span id="busy-detail">Please be patient.</span>
+        <button id="busy-cancel-button" class="btn busy-cancel-btn">Cancel</button>
       </div>
     </div>
 

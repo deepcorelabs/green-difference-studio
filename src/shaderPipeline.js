@@ -304,6 +304,12 @@ export class ChromaKeyRenderer {
     return createImageBitmap(this.exportCanvas);
   }
 
+  /** Synchronous capture — returns an ImageData directly, no GPU roundtrip allocation. */
+  captureFrameSync({ alpha = false, viewModeOverride } = {}) {
+    this.renderInto(this.exportCanvas, { alphaBackground: alpha, viewModeOverride });
+    return this.exportContext.getImageData(0, 0, this.exportCanvas.width, this.exportCanvas.height);
+  }
+
   dispose() {
     this.mesh.geometry.dispose();
     this.material.dispose();

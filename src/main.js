@@ -3,7 +3,8 @@ import "./styles.css";
 
 import iro from "@jaames/iro";
 import noUiSlider from "nouislider";
-import { detectExportSupport, recordBufferedFrames } from "./export.js";
+import { Muxer, ArrayBufferTarget } from "webm-muxer";
+import { detectExportSupport } from "./export.js";
 import { ChromaKeyRenderer } from "./shaderPipeline.js";
 import {
   clamp,
@@ -20,18 +21,19 @@ const el = {
   app: document.querySelector(".app"),
   videoInput: document.querySelector("#video-input"),
   sourceDropZone: document.querySelector("#source-drop-zone"),
+  replaceMediaButton: document.querySelector("#replace-media-button"),
   dropHint: document.querySelector("#drop-hint"),
   processButton: document.querySelector("#process-button"),
   exportWebmButton: document.querySelector("#export-webm-button"),
   exportAlphaButton: document.querySelector("#export-alpha-button"),
   exportPngButton: document.querySelector("#export-png-button"),
   exportAlphaPngButton: document.querySelector("#export-alpha-png-button"),
-  wrapExportPng: document.querySelector("#wrap-export-png"),
-  wrapExportAlphaPng: document.querySelector("#wrap-export-alpha-png"),
   playToggle: document.querySelector("#play-toggle"),
   playTogglePath: document.querySelector("#play-toggle-path"),
+  goToStart: document.querySelector("#go-to-start"),
   stepBackward: document.querySelector("#step-backward"),
   stepForward: document.querySelector("#step-forward"),
+  loopToggle: document.querySelector("#loop-toggle"),
   sourceCanvas: document.querySelector("#source-canvas"),
   processedCanvas: document.querySelector("#processed-canvas"),
   sourceVideo: document.querySelector("#source-video"),
@@ -58,12 +60,14 @@ const el = {
   busyOverlay: document.querySelector("#busy-overlay"),
   busyTitle: document.querySelector("#busy-title"),
   busyDetail: document.querySelector("#busy-detail"),
+  busyProgressFill: document.querySelector("#busy-progress-fill"),
+  busyCancelButton: document.querySelector("#busy-cancel-button"),
   processedViewer: document.querySelector("#processed-viewer"),
   colorPickerMount: document.querySelector("#color-picker-mount"),
   colorPickerPopover: document.querySelector("#color-picker-popover"),
   customSwatch: document.querySelector("#custom-swatch"),
-  wrapExportWebm: document.querySelector("#wrap-export-webm"),
-  wrapExportAlpha: document.querySelector("#wrap-export-alpha"),
+  exportTrigger: document.querySelector("#export-trigger"),
+  exportDropdown: document.querySelector("#export-dropdown"),
   sampleHelp: document.querySelector("#sample-help"),
   sampleSwatches: document.querySelector("#sample-swatches"),
   pickSampleButton: document.querySelector("#pick-sample-button"),
@@ -96,16 +100,20 @@ const state = {
   processing: false,
   abortProcessing: false,
   exporting: false,
-  bufferedFrames: [],
+  processedFramesCount: 0,
+  colorWebmBlob: null,
+  matteWebmBlob: null,
   rafId: 0,
   scrubbing: false,
   playbackRate: 1,
+  loop: false,
   viewMode: "composite",
   restoreViewMode: "composite",
   keyMode: "auto",
   samplingActive: false,
   sampleSimilarity: 0.1,
   sampledColors: [],
+  frameCache: [],
 };
 
 // ── noUiSlider ──
@@ -179,7 +187,7 @@ function syncOutputs() {
 }
 
 function invalidateBuffer(reason) {
-  if (!state.bufferedFrames.length || state.processing || state.exporting) return;
+  if ((!state.colorWebmBlob && !state.matteWebmBlob) || state.processing || state.exporting) return;
   resetBuffer();
   setStatus(reason ?? "Settings changed. Reprocess to export.");
 }
@@ -210,10 +218,19 @@ function setStatus(msg, busy = false) {
   el.statusDot.classList.toggle("busy", busy);
 }
 
-function showBusy(title, detail) {
+function showBusy(title, detail, { cancelable = false } = {}) {
   el.busyTitle.textContent = title;
   el.busyDetail.textContent = detail;
+  setBusyProgress(0, 0, 0);
+  el.busyCancelButton.hidden = !cancelable;
   el.busyOverlay.hidden = false;
+}
+
+function setBusyProgress(progress, current, total) {
+  el.busyProgressFill.style.width = `${Math.round(progress * 100)}%`;
+  el.busyDetail.textContent = total > 0
+    ? `Frame ${current} / ${total} (${Math.round(progress * 100)}%)`
+    : "Please be patient...";
 }
 
 function hideBusy() {
@@ -253,7 +270,13 @@ const busy = () => state.processing || state.exporting;
 
 function updateButtons() {
   const hasSource = Boolean(state.sourceUrl);
-  const hasBuffer = state.bufferedFrames.length > 0;
+  const hasBuffer = state.colorWebmBlob != null || state.matteWebmBlob != null;
+
+  el.replaceMediaButton.textContent = hasSource ? "Replace Media" : "Upload Media";
+
+  el.goToStart.disabled = !hasSource || state.isImage || busy();
+  el.loopToggle.disabled = !hasSource || state.isImage;
+  el.loopToggle.classList.toggle("active", state.loop);
 
   if (state.isImage) {
     el.processButton.disabled = true;
@@ -264,8 +287,12 @@ function updateButtons() {
     el.exportAlphaButton.disabled = true;
     el.exportPngButton.disabled = !hasSource;
     el.exportAlphaPngButton.disabled = !hasSource;
+    el.exportPngButton.hidden = false;
+    el.exportAlphaPngButton.hidden = false;
+    el.exportWebmButton.hidden = true;
+    el.exportAlphaButton.hidden = true;
   } else {
-    el.processButton.textContent = state.processing ? "Cancel" : "Process Frames";
+    el.processButton.textContent = state.processing ? "Cancel" : "Process";
     el.processButton.disabled = !hasSource || state.exporting;
     el.playToggle.disabled = !hasSource || busy();
     el.stepBackward.disabled = !hasSource || busy();
@@ -274,10 +301,16 @@ function updateButtons() {
     el.exportAlphaButton.disabled = !hasBuffer || busy() || !exportSupport.alpha.supported;
     el.exportPngButton.disabled = true;
     el.exportAlphaPngButton.disabled = true;
-
-    el.wrapExportWebm.dataset.tip = !exportSupport.color.supported ? "WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
-    el.wrapExportAlpha.dataset.tip = !exportSupport.alpha.supported ? "Alpha WebM export not supported in this browser." : (!hasBuffer ? "Process frames first to enable export." : "");
+    el.exportPngButton.hidden = true;
+    el.exportAlphaPngButton.hidden = true;
+    el.exportWebmButton.hidden = false;
+    el.exportAlphaButton.hidden = false;
   }
+
+  // Enable the Export trigger button if any export option is available
+  const anyExportAvailable = !el.exportWebmButton.disabled || !el.exportAlphaButton.disabled
+    || !el.exportPngButton.disabled || !el.exportAlphaPngButton.disabled;
+  el.exportTrigger.disabled = !anyExportAvailable;
 
   el.playTogglePath.setAttribute(
     "d",
@@ -287,16 +320,16 @@ function updateButtons() {
   el.sourceDropZone.classList.toggle("has-video", hasSource);
 }
 
-function updateProgress(progress, total = state.frameCount, current = state.bufferedFrames.length) {
+function updateProgress(progress, total = state.frameCount, current = state.processedFramesCount) {
   const pct = Math.round(progress * 100);
   el.processingFill.style.width = `${pct}%`;
-  el.processStatusText.textContent = total > 0 ? `${current} / ${total} frames` : `0 / 0 frames`;
+  el.processStatusText.textContent = current > 0 ? `${current} frames (${pct}%)` : `0 frames`;
 }
 
 function updateExportUI() {
   const parts = [];
   parts.push(exportSupport.color.supported ? `Color: ${exportSupport.color.mimeType}` : "Color WebM: unavailable");
-  parts.push(exportSupport.alpha.supported ? "Alpha: available" : "Alpha: unavailable");
+  parts.push(exportSupport.alpha.supported ? "Matte: available" : "Matte: unavailable");
   el.exportSupport.textContent = parts.join(" \u00b7 ");
 }
 
@@ -318,16 +351,19 @@ function renderSampleSwatches() {
   el.sampleHelp.textContent =
     state.keyMode === "sampled"
       ? (state.samplingActive
-        ? "Crosshair armed. Click the source viewer once to capture a color."
+        ? `Crosshair armed. Click source or processed viewer to pick (${state.sampledColors.length}/5).`
         : "Use Pick Color to arm the crosshair. Click a swatch to remove it.")
       : "Sample mode disabled. Switch to Use Samples to pick colors from the source viewer.";
 
   const canSample = state.keyMode === "sampled" && Boolean(state.sourceUrl) && state.sampledColors.length < 5;
+  // Auto-stop picking when we hit 5
+  if (state.samplingActive && !canSample) state.samplingActive = false;
   el.sampleSimilarityGroup.hidden = state.keyMode !== "sampled";
-  el.pickSampleButton.disabled = !canSample;
-  el.pickSampleButton.textContent = state.samplingActive ? "Cancel Pick" : "Pick Color";
+  el.pickSampleButton.disabled = state.keyMode !== "sampled" || !Boolean(state.sourceUrl) || state.sampledColors.length >= 5;
+  el.pickSampleButton.textContent = state.samplingActive ? "Stop Picking" : "Pick Color";
   el.pickSampleButton.classList.toggle("active", state.samplingActive);
   el.sourceDropZone.classList.toggle("sample-mode", state.samplingActive && canSample);
+  el.processedCanvas.classList.toggle("sample-mode-canvas", state.samplingActive && canSample);
 }
 
 function setViewMode(mode) {
@@ -350,10 +386,6 @@ function setKeyMode(mode) {
 function setImageMode(isImage) {
   state.isImage = isImage;
   el.app.classList.toggle("image-mode", isImage);
-  el.wrapExportPng.hidden = !isImage;
-  el.wrapExportAlphaPng.hidden = !isImage;
-  el.wrapExportWebm.hidden = isImage;
-  el.wrapExportAlpha.hidden = isImage;
 }
 
 // ── Timeline ──
@@ -377,21 +409,36 @@ function timelineRatio(evt) {
   return clamp((x - rect.left) / rect.width, 0, 1);
 }
 
-let pendingSeek = null;
-let seekLock = false;
+let lastScrubRatio = 0;
 
-async function scrubTo(ratio) {
+function findNearestCacheFrame(time) {
+  const cache = state.frameCache;
+  if (!cache.length) return null;
+  let lo = 0, hi = cache.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (cache[mid].time <= time) lo = mid;
+    else hi = mid - 1;
+  }
+  if (lo + 1 < cache.length && Math.abs(cache[lo + 1].time - time) < Math.abs(cache[lo].time - time)) {
+    return cache[lo + 1];
+  }
+  return cache[lo];
+}
+
+function scrubTo(ratio) {
+  lastScrubRatio = ratio;
   setPlayhead(ratio);
   el.currentTime.textContent = formatTime(ratio * state.duration);
-  pendingSeek = ratio * state.duration;
-  if (seekLock) return;
-  seekLock = true;
-  while (pendingSeek !== null) {
-    const t = pendingSeek;
-    pendingSeek = null;
-    try { await seekVideo(t); drawCurrentFrame(); } catch { /* skip */ }
+
+  if (state.frameCache.length > 0) {
+    const frame = findNearestCacheFrame(ratio * state.duration);
+    if (frame) {
+      sourceCtx.clearRect(0, 0, state.width, state.height);
+      sourceCtx.drawImage(frame.bitmap, 0, 0, state.width, state.height);
+      renderer.renderPreview();
+    }
   }
-  seekLock = false;
 }
 
 function onTLDown(e) {
@@ -409,6 +456,8 @@ function onTLDown(e) {
     document.removeEventListener("mouseup", onUp);
     document.removeEventListener("touchmove", onMove);
     document.removeEventListener("touchend", onUp);
+    // After scrub ends, seek video element to match for full-res frame stepping
+    seekVideo(lastScrubRatio * state.duration).then(() => drawCurrentFrame()).catch(() => {});
   };
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
@@ -419,9 +468,59 @@ function onTLDown(e) {
 el.timelineContainer.addEventListener("mousedown", onTLDown);
 el.timelineContainer.addEventListener("touchstart", onTLDown, { passive: false });
 
-// ── Thumbnails ──
+// ── Frame Cache ──
 
-async function generateThumbnails() {
+const CACHE_WIDTH = 320;
+
+function clearFrameCache() {
+  state.frameCache.forEach((f) => f.bitmap?.close());
+  state.frameCache = [];
+}
+
+async function buildFrameCache() {
+  clearFrameCache();
+
+  const cacheH = Math.round(CACHE_WIDTH * state.height / state.width);
+  const cacheCanvas = document.createElement("canvas");
+  cacheCanvas.width = CACHE_WIDTH;
+  cacheCanvas.height = cacheH;
+  const cacheCtx = cacheCanvas.getContext("2d");
+
+  showBusy("Preparing Video", "Building frame cache...");
+
+  // Frame 0
+  await seekVideo(0);
+  cacheCtx.drawImage(el.sourceVideo, 0, 0, CACHE_WIDTH, cacheH);
+  state.frameCache.push({ time: el.sourceVideo.currentTime, bitmap: await createImageBitmap(cacheCanvas) });
+
+  // Play through remaining frames
+  while (!el.sourceVideo.ended) {
+    const meta = await nextVideoFrame();
+    if (!meta) break;
+
+    cacheCtx.drawImage(el.sourceVideo, 0, 0, CACHE_WIDTH, cacheH);
+    state.frameCache.push({ time: meta.mediaTime, bitmap: await createImageBitmap(cacheCanvas) });
+
+    if (state.duration > 0) {
+      const p = meta.mediaTime / state.duration;
+      setBusyProgress(p, state.frameCache.length, state.frameCache.length);
+      el.busyDetail.textContent = `Frame ${state.frameCache.length}`;
+    }
+  }
+
+  // Derive real FPS/frame count from what we actually got
+  if (state.frameCache.length > 1 && state.duration > 0) {
+    state.fps = state.frameCache.length / state.duration;
+    state.frameCount = state.frameCache.length;
+    updateMeta();
+  }
+
+  hideBusy();
+  buildThumbnailsFromCache();
+  await seekVideo(0);
+}
+
+function buildThumbnailsFromCache() {
   const canvas = el.timelineThumbs;
   const rect = el.timelineContainer.getBoundingClientRect();
   const totalW = Math.round(rect.width);
@@ -431,23 +530,20 @@ async function generateThumbnails() {
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#0a0e12";
   ctx.fillRect(0, 0, totalW, totalH);
-  if (!state.width || !state.height || !state.duration) return;
+
+  if (!state.frameCache.length || !state.duration) return;
 
   const thumbH = totalH;
   const thumbW = Math.round(thumbH * (state.width / state.height));
   const count = Math.max(1, Math.ceil(totalW / thumbW));
 
   for (let i = 0; i < count; i++) {
-    const baseTime = (i / count) * state.duration;
-    const time = i === 0
-      ? Math.min(Math.max(1 / Math.max(state.fps, 1) * 0.1, 0.001), Math.max(0, state.duration - 0.01))
-      : Math.min(baseTime, state.duration - 0.01);
-    try {
-      await seekVideo(time);
-      ctx.drawImage(el.sourceVideo, Math.round(i * thumbW), 0, thumbW, thumbH);
-    } catch { /* skip */ }
+    const targetTime = (i / count) * state.duration;
+    const frame = findNearestCacheFrame(targetTime);
+    if (frame) {
+      ctx.drawImage(frame.bitmap, Math.round(i * thumbW), 0, thumbW, thumbH);
+    }
   }
-  await seekVideo(0);
   drawBufferTimeline();
 }
 
@@ -459,13 +555,11 @@ function drawBufferTimeline() {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (!state.duration || !state.bufferedFrames.length) return;
+  if (!state.duration || !state.processedFramesCount) return;
 
   ctx.fillStyle = "rgba(114, 255, 159, 0.8)";
-  for (const frame of state.bufferedFrames) {
-    const x = (frame.time / state.duration) * canvas.width;
-    ctx.fillRect(x - 0.5, 0, 1.5, 3);
-  }
+  const ratio = state.processedFramesCount / state.frameCount;
+  ctx.fillRect(0, 0, ratio * canvas.width, 3);
 }
 
 // ── Seek ──
@@ -551,8 +645,9 @@ document.querySelectorAll(".speed-btn").forEach((btn) => {
 // ── Buffer ──
 
 function resetBuffer() {
-  state.bufferedFrames.forEach((f) => f.bitmap.close?.());
-  state.bufferedFrames = [];
+  state.processedFramesCount = 0;
+  state.colorWebmBlob = null;
+  state.matteWebmBlob = null;
   updateProgress(0, state.frameCount, 0);
   drawBufferTimeline();
   updateButtons();
@@ -560,19 +655,10 @@ function resetBuffer() {
 
 // ── Load ──
 
-async function inferFps() {
-  try {
-    const s = el.sourceVideo.captureStream?.();
-    const [t] = s?.getVideoTracks?.() ?? [];
-    const fps = t?.getSettings?.().frameRate;
-    t?.stop(); s?.getTracks?.().forEach((tr) => tr.stop());
-    return Number.isFinite(fps) && fps > 0 ? fps : DEFAULT_FPS;
-  } catch { return DEFAULT_FPS; }
-}
-
 async function loadVideo(file) {
   await pausePlayback();
   resetBuffer();
+  clearFrameCache();
   state.sampledColors = [];
   state.keyMode = "auto";
   state.samplingActive = false;
@@ -597,15 +683,14 @@ async function loadVideo(file) {
   });
 
   state.duration = el.sourceVideo.duration;
-  state.fps = await inferFps();
+  state.fps = DEFAULT_FPS;
   state.frameCount = estimateFrameCount(state.duration, state.fps);
   setCanvasSize(el.sourceVideo.videoWidth, el.sourceVideo.videoHeight);
   renderer.setSource(el.sourceVideo);
   updateMeta();
 
-  setStatus("Generating thumbnails...", true);
-  await generateThumbnails();
-  await seekVideo(0);
+  setStatus("Building frame cache...", true);
+  await buildFrameCache();
   renderSampleSwatches();
   setKeyMode("auto");
   setViewMode("composite");
@@ -617,6 +702,7 @@ async function loadVideo(file) {
 async function loadImage(file) {
   await pausePlayback();
   resetBuffer();
+  clearFrameCache();
   state.sampledColors = [];
   state.keyMode = "auto";
   state.samplingActive = false;
@@ -665,22 +751,26 @@ async function handleFile(file) {
   } catch (e) { console.error(e); setStatus(e.message || "Load failed."); }
 }
 
-function sampleColorFromSourceEvent(event) {
+function sampleColorFromSourceEvent(event, fromProcessed = false) {
   if (!state.sourceUrl || state.keyMode !== "sampled" || !state.samplingActive) return;
-  const rect = el.sourceCanvas.getBoundingClientRect();
-  const x = clamp((event.clientX - rect.left) / rect.width, 0, 1) * state.width;
-  const y = clamp((event.clientY - rect.top) / rect.height, 0, 1) * state.height;
+  if (state.sampledColors.length >= 5) return;
+
+  // Always sample from the SOURCE canvas — even when clicking on the processed viewer.
+  // The processed view is a keyed composite, so we want the original color, not the
+  // despilled/neutralized output. We just map the click position to source coordinates.
+  const refEl = fromProcessed ? el.processedCanvas : el.sourceCanvas;
+  const rect = refEl.getBoundingClientRect();
+  const x = Math.floor(clamp((event.clientX - rect.left) / rect.width, 0, 1) * state.width);
+  const y = Math.floor(clamp((event.clientY - rect.top) / rect.height, 0, 1) * state.height);
+
   drawSourceFrame();
-  const pixel = sourceCtx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data;
-  const color = {
-    r: pixel[0],
-    g: pixel[1],
-    b: pixel[2],
-    hex: `#${[pixel[0], pixel[1], pixel[2]].map((value) => value.toString(16).padStart(2, "0")).join("")}`,
-  };
+  const pixel = sourceCtx.getImageData(x, y, 1, 1).data;
+  const r = pixel[0], g = pixel[1], b = pixel[2];
+  const hex = `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+  const color = { r, g, b, hex };
 
   state.sampledColors = [...state.sampledColors.slice(-4), color];
-  state.samplingActive = false;
+  // Do NOT deactivate — keep picking mode persistent
   renderSampleSwatches();
   invalidateBuffer("Sampled colors changed. Reprocess to export.");
   renderer.updateSettings(getSettings());
@@ -689,40 +779,183 @@ function sampleColorFromSourceEvent(event) {
 
 // ── Process ──
 
+/**
+ * Advance the video by exactly one frame using play → requestVideoFrameCallback → pause.
+ * The decoder keeps its sequential state between cycles, so each frame is O(1) to decode.
+ * Returns the callback metadata (includes mediaTime) or null if video ended / timed out.
+ */
+function nextVideoFrame() {
+  return new Promise((resolve) => {
+    if (el.sourceVideo.ended) { resolve(null); return; }
+
+    let tid;
+    let rvfcHandle;
+
+    const cleanup = () => {
+      clearTimeout(tid);
+      el.sourceVideo.removeEventListener("ended", onEnded);
+    };
+
+    const onFrame = (_now, meta) => {
+      cleanup();
+      el.sourceVideo.pause();
+      resolve(meta);
+    };
+
+    const onEnded = () => {
+      cleanup();
+      if (rvfcHandle != null) el.sourceVideo.cancelVideoFrameCallback(rvfcHandle);
+      resolve(null);
+    };
+
+    tid = setTimeout(() => {
+      el.sourceVideo.pause();
+      el.sourceVideo.removeEventListener("ended", onEnded);
+      if (rvfcHandle != null) el.sourceVideo.cancelVideoFrameCallback(rvfcHandle);
+      resolve(null);
+    }, 5000);
+
+    el.sourceVideo.addEventListener("ended", onEnded, { once: true });
+    rvfcHandle = el.sourceVideo.requestVideoFrameCallback(onFrame);
+    el.sourceVideo.play().catch(() => { cleanup(); resolve(null); });
+  });
+}
+
 async function processVideo() {
   if (!state.sourceUrl || state.isImage || state.processing) return;
+  if (typeof VideoEncoder === "undefined") {
+    setStatus("VideoEncoder API not available in this browser.");
+    return;
+  }
+  if (!el.sourceVideo.requestVideoFrameCallback) {
+    setStatus("requestVideoFrameCallback not supported in this browser.");
+    return;
+  }
+
   await pausePlayback();
   resetBuffer();
   state.processing = true;
   state.abortProcessing = false;
   updateButtons();
-  showBusy("Processing Frames", "Please be patient...");
+  showBusy("Processing & Encoding", "", { cancelable: true });
   setStatus("Processing...", true);
+
   const total = Math.max(1, state.frameCount);
+  const fps = state.fps || 30;
+  const width = state.width;
+  const height = state.height;
+  const bitrate = Math.min(18_000_000, Math.max(4_000_000, width * height * fps * 2));
+  const keyInterval = Math.max(1, Math.round(fps * 2));
+
+  const codec = "vp8";
+  const muxCodec = "V_VP8";
+
+  const colorTarget = new ArrayBufferTarget();
+  const colorMuxer = new Muxer({ target: colorTarget, video: { codec: muxCodec, width, height } });
+  const colorEncoder = new VideoEncoder({
+    output: (chunk, meta) => colorMuxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error("Color encoder:", e),
+  });
+  colorEncoder.configure({ codec, width, height, bitrate, framerate: fps });
+
+  const matteTarget = new ArrayBufferTarget();
+  const matteMuxer = new Muxer({ target: matteTarget, video: { codec: muxCodec, width, height } });
+  const matteEncoder = new VideoEncoder({
+    output: (chunk, meta) => matteMuxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error("Matte encoder:", e),
+  });
+  matteEncoder.configure({ codec, width, height, bitrate, framerate: fps });
+
+  const renderCanvas = document.createElement("canvas");
+  renderCanvas.width = width;
+  renderCanvas.height = height;
+
+  let frameIndex = 0;
+  let latestMediaTime = 0;
+
+  function encodeCurrentFrame(timestampUs, mediaTimeSec) {
+    drawSourceFrame();
+    const keyFrame = frameIndex % keyInterval === 0;
+
+    renderer.renderInto(renderCanvas, { alphaBackground: false, viewModeOverride: 0 });
+    const cf = new VideoFrame(renderCanvas, { timestamp: timestampUs, alpha: "discard" });
+    colorEncoder.encode(cf, { keyFrame });
+    cf.close();
+
+    renderer.renderInto(renderCanvas, { alphaBackground: false, viewModeOverride: 1 });
+    const mf = new VideoFrame(renderCanvas, { timestamp: timestampUs, alpha: "discard" });
+    matteEncoder.encode(mf, { keyFrame });
+    mf.close();
+
+    frameIndex++;
+    latestMediaTime = mediaTimeSec;
+    state.processedFramesCount = frameIndex;
+    // Use time-based progress — always accurate regardless of FPS detection
+    const progress = state.duration > 0 ? Math.min(1, mediaTimeSec / state.duration) : 0;
+    updateProgress(progress, frameIndex, frameIndex);
+    setBusyProgress(progress, frameIndex, frameIndex);
+    if (frameIndex % 15 === 0) drawBufferTimeline();
+  }
 
   try {
-    for (let i = 0; i < total; i++) {
-      if (state.abortProcessing) {
-        setStatus("Processing cancelled.");
-        break;
-      }
-      const time = Math.min(frameToTime(i, state.fps), Math.max(0, state.duration - 0.001));
-      await seekVideo(time);
-      drawSourceFrame();
-      renderer.renderPreview({ viewModeOverride: 0 });
-      const bitmap = await renderer.captureFrame({ alpha: true, viewModeOverride: 0 });
-      state.bufferedFrames.push({ time, bitmap });
-      updateProgress((i + 1) / total, total, i + 1);
-      el.busyDetail.textContent = `Frame ${i + 1} / ${total} (${Math.round(((i + 1) / total) * 100)}%)`;
-      if (i % 8 === 0) {
-        drawBufferTimeline();
-        await new Promise((r) => setTimeout(r, 0));
+    // Seek to start and encode frame 0 directly
+    await seekVideo(0);
+    encodeCurrentFrame(Math.round(el.sourceVideo.currentTime * 1_000_000), el.sourceVideo.currentTime);
+
+    // Process remaining frames by PLAYING the video one frame at a time.
+    // play() → requestVideoFrameCallback → pause(). The browser decoder
+    // advances sequentially in O(1) per frame instead of re-seeking from a keyframe.
+    let lastMediaTime = el.sourceVideo.currentTime;
+    const safetyLimit = total * 2;
+
+    while (!el.sourceVideo.ended && !state.abortProcessing && frameIndex < safetyLimit) {
+      const meta = await nextVideoFrame();
+      if (!meta) break;
+
+      // Skip duplicate frames (can happen on first play after seek)
+      if (Math.abs(meta.mediaTime - lastMediaTime) < 0.0005) continue;
+      lastMediaTime = meta.mediaTime;
+
+      encodeCurrentFrame(Math.round(meta.mediaTime * 1_000_000), meta.mediaTime);
+
+      // Backpressure: if hw encoders fall behind, wait for them
+      while (colorEncoder.encodeQueueSize > 8 || matteEncoder.encodeQueueSize > 8) {
+        await new Promise((r) => setTimeout(r, 1));
       }
     }
-    drawBufferTimeline();
-    if (!state.abortProcessing) setStatus("Processing complete. Ready for export.");
-  } catch (e) { console.error(e); setStatus(e.message || "Processing failed."); }
-  finally { state.processing = false; state.abortProcessing = false; hideBusy(); updateButtons(); drawCurrentFrame(); }
+
+    if (!state.abortProcessing) {
+      setBusyProgress(1, frameIndex, frameIndex);
+      el.busyDetail.textContent = "Finalizing...";
+      await colorEncoder.flush();
+      colorMuxer.finalize();
+      state.colorWebmBlob = new Blob([colorTarget.buffer], { type: "video/webm" });
+      await matteEncoder.flush();
+      matteMuxer.finalize();
+      state.matteWebmBlob = new Blob([matteTarget.buffer], { type: "video/webm" });
+
+      // Update state with real FPS and frame count now that we know the truth
+      if (frameIndex > 1 && state.duration > 0) {
+        state.fps = frameIndex / state.duration;
+        state.frameCount = frameIndex;
+        updateMeta();
+      }
+      drawBufferTimeline();
+      setStatus(`Done. ${frameIndex} frames at ${state.fps.toFixed(2)} fps.`);
+    }
+  } catch (e) {
+    console.error(e);
+    setStatus(e.message || "Processing failed.");
+  } finally {
+    el.sourceVideo.pause();
+    try { colorEncoder.close(); } catch { /* */ }
+    try { matteEncoder.close(); } catch { /* */ }
+    state.processing = false;
+    state.abortProcessing = false;
+    hideBusy();
+    updateButtons();
+    drawCurrentFrame();
+  }
 }
 
 // ── Export ──
@@ -735,26 +968,12 @@ function downloadBlob(blob, name) {
 }
 
 async function exportVideo({ alpha }) {
-  if (!state.bufferedFrames.length) return;
-  const sup = alpha ? exportSupport.alpha : exportSupport.color;
-  if (!sup.supported) { setStatus(alpha ? "Alpha WebM unavailable." : "WebM unavailable."); return; }
-  state.exporting = true;
-  updateButtons();
-  const label = alpha ? "Alpha WebM" : "WebM";
-  showBusy(`Exporting ${label}`, "Encoding... please be patient.");
-  setStatus(`Exporting ${label.toLowerCase()}...`, true);
-
-  try {
-    const blob = await recordBufferedFrames({
-      frames: state.bufferedFrames, width: state.width, height: state.height,
-      fps: state.fps, mimeType: sup.mimeType, alpha,
-      onProgress: (p) => { updateProgress(p, state.frameCount); el.busyDetail.textContent = `Encoding... ${Math.round(p * 100)}%`; },
-    });
-    const safe = (state.sourceName || "out").replace(/\.[^.]+$/, "").replace(/[^a-z0-9\-_]+/gi, "_").toLowerCase();
-    downloadBlob(blob, `${safe}${alpha ? "_alpha" : ""}.webm`);
-    setStatus(`${label} exported.`);
-  } catch (e) { console.error(e); setStatus(e.message || "Export failed."); }
-  finally { state.exporting = false; hideBusy(); updateButtons(); drawCurrentFrame(); }
+  const blob = alpha ? state.matteWebmBlob : state.colorWebmBlob;
+  if (!blob) { setStatus("Export not available."); return; }
+  const label = alpha ? "Matte WebM" : "Color WebM";
+  const safe = (state.sourceName || "out").replace(/\.[^.]+$/, "").replace(/[^a-z0-9\-_]+/gi, "_").toLowerCase();
+  downloadBlob(blob, `${safe}${alpha ? "_alpha" : ""}.webm`);
+  setStatus(`${label} exported.`);
 }
 
 function exportImagePng({ alpha }) {
@@ -774,6 +993,11 @@ function exportImagePng({ alpha }) {
 // ── Events ──
 
 el.videoInput.addEventListener("change", (e) => { handleFile(e.target.files?.[0]); });
+el.replaceMediaButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  el.videoInput.click();
+});
 ["dragenter", "dragover"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.add("drag-active"); }));
 ["dragleave", "dragend"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); }));
 el.sourceDropZone.addEventListener("drop", (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); handleFile(e.dataTransfer?.files?.[0]); });
@@ -781,11 +1005,28 @@ el.sourceDropZone.addEventListener("click", (e) => {
   if (state.keyMode !== "sampled" || !state.sourceUrl || !state.samplingActive) return;
   e.preventDefault();
   e.stopPropagation();
-  sampleColorFromSourceEvent(e);
+  sampleColorFromSourceEvent(e, false);
+});
+el.processedCanvas.addEventListener("click", (e) => {
+  if (state.keyMode !== "sampled" || !state.sourceUrl || !state.samplingActive) return;
+  e.preventDefault();
+  e.stopPropagation();
+  sampleColorFromSourceEvent(e, true);
+});
+el.goToStart.addEventListener("click", async () => {
+  if (!state.sourceUrl || state.isImage || busy()) return;
+  await pausePlayback();
+  await seekVideo(0);
+  drawCurrentFrame();
 });
 el.playToggle.addEventListener("click", togglePlayback);
 el.stepBackward.addEventListener("click", () => stepFrame(-1));
 el.stepForward.addEventListener("click", () => stepFrame(1));
+el.loopToggle.addEventListener("click", () => {
+  state.loop = !state.loop;
+  el.sourceVideo.loop = state.loop;
+  updateButtons();
+});
 el.processButton.addEventListener("click", () => {
   if (state.processing) {
     state.abortProcessing = true;
@@ -793,11 +1034,34 @@ el.processButton.addEventListener("click", () => {
     processVideo();
   }
 });
-el.exportWebmButton.addEventListener("click", () => exportVideo({ alpha: false }));
-el.exportAlphaButton.addEventListener("click", () => exportVideo({ alpha: true }));
-el.exportPngButton.addEventListener("click", () => exportImagePng({ alpha: false }));
-el.exportAlphaPngButton.addEventListener("click", () => exportImagePng({ alpha: true }));
-el.sourceVideo.addEventListener("ended", () => { pausePlayback().then(() => drawCurrentFrame()).catch(console.error); });
+el.busyCancelButton.addEventListener("click", () => { state.abortProcessing = true; });
+el.exportWebmButton.addEventListener("click", () => { closeExportDropdown(); exportVideo({ alpha: false }); });
+el.exportAlphaButton.addEventListener("click", () => { closeExportDropdown(); exportVideo({ alpha: true }); });
+el.exportPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ alpha: false }); });
+el.exportAlphaPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ alpha: true }); });
+
+el.exportTrigger.addEventListener("click", (e) => {
+  e.stopPropagation();
+  el.exportDropdown.classList.toggle("open");
+});
+
+function closeExportDropdown() {
+  el.exportDropdown.classList.remove("open");
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".export-dropdown-wrap")) closeExportDropdown();
+});
+el.sourceVideo.addEventListener("ended", () => {
+  if (state.loop && state.playing) {
+    seekVideo(0).then(() => {
+      el.sourceVideo.play();
+      drawCurrentFrame();
+    }).catch(console.error);
+  } else {
+    pausePlayback().then(() => drawCurrentFrame()).catch(console.error);
+  }
+});
 document.querySelectorAll("[data-view-mode]").forEach((btn) => {
   if (btn.dataset.viewMode === "source") {
     const activateSourcePreview = (event) => {
@@ -828,7 +1092,7 @@ document.querySelectorAll("[data-view-mode]").forEach((btn) => {
 });
 document.querySelectorAll("[data-key-mode]").forEach((btn) => btn.addEventListener("click", () => setKeyMode(btn.dataset.keyMode)));
 el.pickSampleButton.addEventListener("click", () => {
-  if (state.keyMode !== "sampled" || !state.sourceUrl || state.sampledColors.length >= 5) return;
+  if (state.keyMode !== "sampled" || !state.sourceUrl) return;
   state.samplingActive = !state.samplingActive;
   renderSampleSwatches();
 });
@@ -860,6 +1124,17 @@ window.addEventListener("keydown", (e) => {
     stepFrame(e.shiftKey ? 10 : 1);
   } else if (e.code === "Escape") {
     if (state.processing) state.abortProcessing = true;
+  } else if (e.code === "Home") {
+    e.preventDefault();
+    if (state.sourceUrl && !state.isImage && !busy()) {
+      pausePlayback().then(() => seekVideo(0)).then(() => drawCurrentFrame()).catch(() => {});
+    }
+  } else if (e.code === "KeyL") {
+    if (state.sourceUrl && !state.isImage) {
+      state.loop = !state.loop;
+      el.sourceVideo.loop = state.loop;
+      updateButtons();
+    }
   }
 });
 
