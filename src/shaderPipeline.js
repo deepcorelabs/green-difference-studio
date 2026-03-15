@@ -25,8 +25,15 @@ uniform vec2 uTexelSize;
 uniform vec2 uHueRange;
 uniform float uSatFloor;
 uniform vec2 uLightRange;
+uniform float uDespillDepth;
 
 varying vec2 vUv;
+
+float quickKeyAlpha(vec2 uv) {
+  vec3 c = texture2D(uTexture, uv).rgb;
+  float diff = clamp(c.g - max(c.r, c.b), 0.0, 1.0);
+  return texture2D(uCurveLUT, vec2(diff, 0.5)).r;
+}
 
 vec3 rgbToHsl(vec3 c) {
   float mx = max(max(c.r, c.g), c.b);
@@ -141,6 +148,8 @@ float applyFeather(vec2 uv, float alpha) {
 
 void main() {
   vec4 sampleColor = texture2D(uTexture, vUv);
+
+  // 1. Choke + Feather FIRST
   float alpha = computeChokedAlphaAt(vUv);
   alpha = applyFeather(vUv, alpha);
   alpha = clamp(alpha, 0.0, 1.0);
@@ -150,20 +159,44 @@ void main() {
     return;
   }
 
-  float reference = max(sampleColor.r, sampleColor.b);
+  // 2. Despill SECOND — uses choked alpha for edge proximity
   float spillAmount = max(sampleColor.g - max(sampleColor.r, sampleColor.b), 0.0);
   float spillFactor = 1.0 - smoothstep(0.0, max(uSpillSuppression, 0.0001), spillAmount);
-  float edgeMask = spillFactor * (1.0 - alpha);
-  vec3 neutralized = vec3(
-    sampleColor.r + uDespillLift * edgeMask,
-    mix(sampleColor.g, reference, edgeMask),
-    sampleColor.b + uDespillLift * edgeMask * 0.55
-  );
+  float edgeProximity = 1.0 - alpha;
+  if (uDespillDepth > 0.5) {
+    // Sample 4 concentric rings at 25/50/75/100% of radius.
+    // Closer rings weighted more (gaussian-like falloff).
+    float weights[4];
+    weights[0] = 1.0;   // 25% ring — strongest
+    weights[1] = 0.65;  // 50% ring
+    weights[2] = 0.35;  // 75% ring
+    weights[3] = 0.15;  // 100% ring — weakest
+    float totalW = 0.0;
+    float accum = 0.0;
+    for (int ring = 0; ring < 4; ring++) {
+      float frac = float(ring + 1) * 0.25;
+      vec2 r = uTexelSize * uDespillDepth * frac;
+      float mn = quickKeyAlpha(vUv + vec2(r.x, 0.0));
+      mn = min(mn, quickKeyAlpha(vUv - vec2(r.x, 0.0)));
+      mn = min(mn, quickKeyAlpha(vUv + vec2(0.0, r.y)));
+      mn = min(mn, quickKeyAlpha(vUv - vec2(0.0, r.y)));
+      float w = weights[ring];
+      accum += (1.0 - mn) * w;
+      totalW += w;
+    }
+    edgeProximity = max(edgeProximity, accum / totalW);
+  }
+  float edgeMask = spillFactor * edgeProximity;
 
-  float lumBefore = dot(sampleColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-  float lumAfter = dot(neutralized, vec3(0.2126, 0.7152, 0.0722));
-  neutralized *= lumBefore / max(lumAfter, 0.001);
-  neutralized = clamp(neutralized, 0.0, 1.0);
+  float greenCeiling = (sampleColor.r + sampleColor.b) * 0.5;
+  float correctedGreen = mix(sampleColor.g, min(sampleColor.g, greenCeiling), edgeMask);
+  float greenRemoved = sampleColor.g - correctedGreen;
+  float lift = greenRemoved * uDespillLift;
+  vec3 neutralized = clamp(vec3(
+    sampleColor.r + lift,
+    correctedGreen + lift,
+    sampleColor.b + lift
+  ), 0.0, 1.0);
 
   if (uViewMode > 0.5) {
     gl_FragColor = vec4(vec3(alpha), 1.0);
@@ -217,6 +250,7 @@ export class ChromaKeyRenderer {
       uSampleSimilarity: { value: 0.1 },
       uKeyColors: { value: Array.from({ length: 5 }, () => new THREE.Vector3(0, 1, 0)) },
       uTexelSize: { value: new THREE.Vector2(1 / this.size.width, 1 / this.size.height) },
+      uDespillDepth: { value: 0 },
       uHueRange: { value: new THREE.Vector2(80, 160) },
       uSatFloor: { value: 0.15 },
       uLightRange: { value: new THREE.Vector2(0.05, 0.95) },
@@ -301,6 +335,7 @@ export class ChromaKeyRenderer {
     this.uniforms.uUseSampledKey.value = settings.useSampledKey ? 1 : 0;
     this.uniforms.uKeyColorCount.value = settings.keyColors?.length ?? 0;
     this.uniforms.uSampleSimilarity.value = settings.sampleSimilarity ?? 0.1;
+    this.uniforms.uDespillDepth.value = settings.despillDepth ?? 0;
 
     if (settings.hueRange) this.uniforms.uHueRange.value.set(settings.hueRange[0], settings.hueRange[1]);
     this.uniforms.uSatFloor.value = settings.satFloor ?? 0.15;

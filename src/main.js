@@ -58,6 +58,7 @@ const el = {
   curveEditorMount: document.querySelector("#curve-editor-mount"),
   spillOutput: document.querySelector("#spill-output"),
   despillOutput: document.querySelector("#despill-output"),
+  despillDepthOutput: document.querySelector("#despill-depth-output"),
   chokeOutput: document.querySelector("#choke-output"),
   featherOutput: document.querySelector("#feather-output"),
   hueOutput: document.querySelector("#hue-output"),
@@ -167,6 +168,13 @@ const despillSlider = noUiSlider.create(document.querySelector("#despill-slider"
   step: 0.001,
 });
 
+const despillDepthSlider = noUiSlider.create(document.querySelector("#despill-depth-slider"), {
+  start: [0],
+  connect: [true, false],
+  range: { min: 0, max: 200 },
+  step: 1,
+});
+
 const chokeSlider = noUiSlider.create(document.querySelector("#choke-slider"), {
   start: [0],
   connect: [true, false],
@@ -221,6 +229,7 @@ function getSettings() {
     curveLUT,
     spillSuppression: spillSlider.get(true),
     despillLift: despillSlider.get(true),
+    despillDepth: despillDepthSlider.get(true),
     choke: chokeSlider.get(true),
     feather: featherSlider.get(true),
     hueRange: hueSlider.get(true),
@@ -241,6 +250,7 @@ function syncOutputs() {
   }
   el.spillOutput.textContent = s.spillSuppression.toFixed(3);
   el.despillOutput.textContent = s.despillLift.toFixed(3);
+  el.despillDepthOutput.textContent = s.despillDepth.toFixed(1);
   el.chokeOutput.textContent = s.choke.toFixed(3);
   el.featherOutput.textContent = s.feather.toFixed(2);
   el.hueOutput.textContent = `${Math.round(s.hueRange[0])} \u2013 ${Math.round(s.hueRange[1])}`;
@@ -267,6 +277,7 @@ function applySettings({ invalidate = true } = {}) {
 thresholdSlider.on("update", () => { if (thresholdMode === "simple") applySettings(); });
 spillSlider.on("update", applySettings);
 despillSlider.on("update", applySettings);
+despillDepthSlider.on("update", applySettings);
 chokeSlider.on("update", applySettings);
 featherSlider.on("update", applySettings);
 hueSlider.on("update", applySettings);
