@@ -172,7 +172,7 @@ const despillDepthSlider = noUiSlider.create(document.querySelector("#despill-de
   start: [0],
   connect: [true, false],
   range: { min: 0, max: 200 },
-  step: 1,
+  step: 0.1,
 });
 
 const chokeSlider = noUiSlider.create(document.querySelector("#choke-slider"), {
@@ -323,6 +323,18 @@ function setBusyProgress(progress, current, total) {
 
 function hideBusy() {
   el.busyOverlay.hidden = true;
+}
+
+function setBusyMessage(title, detail, { cancelable } = {}) {
+  if (title != null) el.busyTitle.textContent = title;
+  if (detail != null) el.busyDetail.textContent = detail;
+  if (typeof cancelable === "boolean") {
+    el.busyCancelButton.hidden = !cancelable;
+  }
+}
+
+function nextPaint() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 function setCanvasSize(w, h) {
@@ -574,7 +586,8 @@ async function buildFrameCache() {
   cacheCanvas.height = cacheH;
   const cacheCtx = cacheCanvas.getContext("2d");
 
-  showBusy("Preparing Video", "Building frame cache...");
+  showBusy("Preparing Video", "Building frame cache...", { cancelable: false });
+  const approxTotal = Math.max(1, state.frameCount);
 
   // Frame 0
   await seekVideo(0);
@@ -591,8 +604,8 @@ async function buildFrameCache() {
 
     if (state.duration > 0) {
       const p = meta.mediaTime / state.duration;
-      setBusyProgress(p, state.frameCache.length, state.frameCache.length);
-      el.busyDetail.textContent = `Frame ${state.frameCache.length}`;
+      setBusyProgress(p, state.frameCache.length, approxTotal);
+      el.busyDetail.textContent = `Frame ${state.frameCache.length} / ~${approxTotal}`;
     }
   }
 
@@ -938,14 +951,41 @@ async function processVideo() {
   const codec = "vp8";
   const muxCodec = "V_VP8";
 
-  const colorTarget = new ArrayBufferTarget();
-  const colorMuxer = new Muxer({ target: colorTarget, video: { codec: muxCodec, width, height } });
-  const colorEncoder = new VideoEncoder({
-    output: (chunk, meta) => colorMuxer.addVideoChunk(chunk, meta),
-    error: (e) => console.error("Color encoder:", e),
-  });
-  colorEncoder.configure({ codec, width, height, bitrate, framerate: fps });
+  // --- Color+Alpha WebM via MediaRecorder (Chrome's VP8/VP9 encoder handles alpha natively) ---
+  const colorCanvas = document.createElement("canvas");
+  colorCanvas.width = width;
+  colorCanvas.height = height;
+  const colorCtx = colorCanvas.getContext("2d", { alpha: true });
+  const colorStream = colorCanvas.captureStream(0);
+  const colorTrack = colorStream.getVideoTracks()[0];
+  const hasRequestFrame = typeof colorTrack?.requestFrame === "function";
 
+  // Grab audio from source video and add to the output stream
+  try {
+    const srcStream = el.sourceVideo.captureStream ? el.sourceVideo.captureStream() : el.sourceVideo.mozCaptureStream?.();
+    if (srcStream) {
+      for (const audioTrack of srcStream.getAudioTracks()) {
+        colorStream.addTrack(audioTrack);
+      }
+    }
+  } catch { /* no audio available */ }
+
+  const colorMimeType = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp9", "video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm"]
+    .find((m) => MediaRecorder.isTypeSupported(m)) || "video/webm";
+
+  const colorRecorder = new MediaRecorder(colorStream, {
+    mimeType: colorMimeType,
+    videoBitsPerSecond: bitrate,
+  });
+  const colorChunks = [];
+  colorRecorder.ondataavailable = (e) => { if (e.data.size > 0) colorChunks.push(e.data); };
+  const colorRecorderDone = new Promise((resolve, reject) => {
+    colorRecorder.onstop = () => resolve(new Blob(colorChunks, { type: colorMimeType }));
+    colorRecorder.onerror = (e) => reject(e.error ?? new Error("MediaRecorder failed"));
+  });
+  colorRecorder.start();
+
+  // --- Standalone Matte WebM via VideoEncoder (no alpha needed, fast) ---
   const matteTarget = new ArrayBufferTarget();
   const matteMuxer = new Muxer({ target: matteTarget, video: { codec: muxCodec, width, height } });
   const matteEncoder = new VideoEncoder({
@@ -960,15 +1000,14 @@ async function processVideo() {
 
   let frameIndex = 0;
   let latestMediaTime = 0;
+  const frameDurationMs = 1000 / fps;
 
   function encodeCurrentFrame(timestampUs, mediaTimeSec) {
     drawSourceFrame();
     const keyFrame = frameIndex % keyInterval === 0;
 
-    renderer.renderInto(renderCanvas, { alphaBackground: false, viewModeOverride: 0 });
-    const cf = new VideoFrame(renderCanvas, { timestamp: timestampUs, alpha: "discard" });
-    colorEncoder.encode(cf, { keyFrame });
-    cf.close();
+    renderer.renderInto(colorCanvas, { alphaBackground: true, viewModeOverride: 0 });
+    if (hasRequestFrame) colorTrack.requestFrame();
 
     renderer.renderInto(renderCanvas, { alphaBackground: false, viewModeOverride: 1 });
     const mf = new VideoFrame(renderCanvas, { timestamp: timestampUs, alpha: "discard" });
@@ -978,7 +1017,6 @@ async function processVideo() {
     frameIndex++;
     latestMediaTime = mediaTimeSec;
     state.processedFramesCount = frameIndex;
-    // Use time-based progress — always accurate regardless of FPS detection
     const progress = state.duration > 0 ? Math.min(1, mediaTimeSec / state.duration) : 0;
     updateProgress(progress, frameIndex, frameIndex);
     setBusyProgress(progress, frameIndex, frameIndex);
@@ -986,13 +1024,14 @@ async function processVideo() {
   }
 
   try {
-    // Seek to start and encode frame 0 directly
     await seekVideo(0);
+
+    // Use performance.now() to pace frames at the correct real-time rate.
+    // MediaRecorder timestamps = wall-clock time between requestFrame() calls,
+    // so we must wait exactly one frame duration between calls.
+    let wallClockStart = performance.now();
     encodeCurrentFrame(Math.round(el.sourceVideo.currentTime * 1_000_000), el.sourceVideo.currentTime);
 
-    // Process remaining frames by PLAYING the video one frame at a time.
-    // play() → requestVideoFrameCallback → pause(). The browser decoder
-    // advances sequentially in O(1) per frame instead of re-seeking from a keyframe.
     let lastMediaTime = el.sourceVideo.currentTime;
     const safetyLimit = total * 2;
 
@@ -1000,29 +1039,42 @@ async function processVideo() {
       const meta = await nextVideoFrame();
       if (!meta) break;
 
-      // Skip duplicate frames (can happen on first play after seek)
       if (Math.abs(meta.mediaTime - lastMediaTime) < 0.0005) continue;
       lastMediaTime = meta.mediaTime;
 
+      // Wait until the correct wall-clock moment for this frame
+      const targetWallTime = wallClockStart + meta.mediaTime * 1000;
+      const now = performance.now();
+      const waitMs = targetWallTime - now;
+      if (waitMs > 1) await new Promise((r) => setTimeout(r, Math.round(waitMs)));
+
       encodeCurrentFrame(Math.round(meta.mediaTime * 1_000_000), meta.mediaTime);
 
-      // Backpressure: if hw encoders fall behind, wait for them
-      while (colorEncoder.encodeQueueSize > 8 || matteEncoder.encodeQueueSize > 8) {
+      // Backpressure: if matte encoder falls behind, wait
+      while (matteEncoder.encodeQueueSize > 8) {
         await new Promise((r) => setTimeout(r, 1));
       }
     }
 
     if (!state.abortProcessing) {
       setBusyProgress(1, frameIndex, frameIndex);
-      el.busyDetail.textContent = "Finalizing...";
-      await colorEncoder.flush();
-      colorMuxer.finalize();
-      state.colorWebmBlob = new Blob([colorTarget.buffer], { type: "video/webm" });
+
+      // Stop MediaRecorder and wait for it to finalize the alpha WebM
+      setBusyMessage("Finalizing", "Encoding WebM + Alpha... this may take a moment.", { cancelable: false });
+      await nextPaint();
+      await new Promise((r) => setTimeout(r, 50));
+      if (colorRecorder.state !== "inactive") colorRecorder.stop();
+      state.colorWebmBlob = await colorRecorderDone;
+
+      // Flush matte encoder
+      setBusyMessage("Finalizing", "Building matte export...", { cancelable: false });
+      await nextPaint();
+      await new Promise((r) => setTimeout(r, 50));
       await matteEncoder.flush();
       matteMuxer.finalize();
       state.matteWebmBlob = new Blob([matteTarget.buffer], { type: "video/webm" });
 
-      // Update state with real FPS and frame count now that we know the truth
+      // Update state with real FPS and frame count
       if (frameIndex > 1 && state.duration > 0) {
         state.fps = frameIndex / state.duration;
         state.frameCount = frameIndex;
@@ -1036,7 +1088,7 @@ async function processVideo() {
     setStatus(e.message || "Processing failed.");
   } finally {
     el.sourceVideo.pause();
-    try { colorEncoder.close(); } catch { /* */ }
+    try { if (colorRecorder.state !== "inactive") colorRecorder.stop(); } catch { /* */ }
     try { matteEncoder.close(); } catch { /* */ }
     state.processing = false;
     state.abortProcessing = false;
@@ -1298,3 +1350,30 @@ updateMeta();
 updateButtons();
 updateProgress(0, 0);
 syncOutputs();
+
+// Welcome modal
+const welcomeModal = document.querySelector("#welcome-modal");
+const welcomeDemo = document.querySelector("#welcome-demo");
+
+async function loadDemoFile() {
+  welcomeModal.hidden = true;
+  try {
+    const res = await fetch("/input.mp4");
+    const blob = await res.blob();
+    await handleFile(new File([blob], "input.mp4", { type: "video/mp4" }));
+    el.sourceVideo.muted = false;
+    togglePlayback();
+  } catch (e) {
+    console.error("Demo load failed:", e);
+    setStatus("Could not load demo file.");
+  }
+}
+
+fetch("/input.mp4", { method: "HEAD" }).then((res) => {
+  if (res.ok) {
+    welcomeModal.hidden = false;
+    welcomeDemo.addEventListener("click", loadDemoFile);
+  }
+}).catch(() => {});
+
+el.videoInput.addEventListener("change", () => { welcomeModal.hidden = true; }, { once: true });

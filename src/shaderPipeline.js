@@ -35,6 +35,53 @@ float quickKeyAlpha(vec2 uv) {
   return texture2D(uCurveLUT, vec2(diff, 0.5)).r;
 }
 
+float sampleRingMinAlpha(vec2 uv, vec2 r) {
+  float mn = quickKeyAlpha(uv + vec2(r.x, 0.0));
+  mn = min(mn, quickKeyAlpha(uv - vec2(r.x, 0.0)));
+  mn = min(mn, quickKeyAlpha(uv + vec2(0.0, r.y)));
+  mn = min(mn, quickKeyAlpha(uv - vec2(0.0, r.y)));
+  mn = min(mn, quickKeyAlpha(uv + r));
+  mn = min(mn, quickKeyAlpha(uv + vec2(-r.x, r.y)));
+  mn = min(mn, quickKeyAlpha(uv + vec2(r.x, -r.y)));
+  mn = min(mn, quickKeyAlpha(uv - r));
+  return mn;
+}
+
+float estimateLocalEdgeSoftness(vec2 uv) {
+  float dx = abs(
+    quickKeyAlpha(uv + vec2(uTexelSize.x, 0.0)) -
+    quickKeyAlpha(uv - vec2(uTexelSize.x, 0.0))
+  );
+  float dy = abs(
+    quickKeyAlpha(uv + vec2(0.0, uTexelSize.y)) -
+    quickKeyAlpha(uv - vec2(0.0, uTexelSize.y))
+  );
+  return clamp((dx + dy) * 2.0, 0.0, 1.0);
+}
+
+float estimateApproxDistanceToBackground(vec2 uv, float maxDepthPx) {
+  if (maxDepthPx <= 0.5) return maxDepthPx;
+
+  float threshold = 0.85;
+
+  vec2 r1 = uTexelSize * (maxDepthPx * 0.125);
+  if (sampleRingMinAlpha(uv, r1) < threshold) return maxDepthPx * 0.125;
+
+  vec2 r2 = uTexelSize * (maxDepthPx * 0.25);
+  if (sampleRingMinAlpha(uv, r2) < threshold) return maxDepthPx * 0.25;
+
+  vec2 r3 = uTexelSize * (maxDepthPx * 0.5);
+  if (sampleRingMinAlpha(uv, r3) < threshold) return maxDepthPx * 0.5;
+
+  vec2 r4 = uTexelSize * (maxDepthPx * 0.75);
+  if (sampleRingMinAlpha(uv, r4) < threshold) return maxDepthPx * 0.75;
+
+  vec2 r5 = uTexelSize * maxDepthPx;
+  if (sampleRingMinAlpha(uv, r5) < threshold) return maxDepthPx;
+
+  return maxDepthPx + 1.0;
+}
+
 vec3 rgbToHsl(vec3 c) {
   float mx = max(max(c.r, c.g), c.b);
   float mn = min(min(c.r, c.g), c.b);
@@ -164,27 +211,13 @@ void main() {
   float spillFactor = 1.0 - smoothstep(0.0, max(uSpillSuppression, 0.0001), spillAmount);
   float edgeProximity = 1.0 - alpha;
   if (uDespillDepth > 0.5) {
-    // Sample 4 concentric rings at 25/50/75/100% of radius.
-    // Closer rings weighted more (gaussian-like falloff).
-    float weights[4];
-    weights[0] = 1.0;   // 25% ring — strongest
-    weights[1] = 0.65;  // 50% ring
-    weights[2] = 0.35;  // 75% ring
-    weights[3] = 0.15;  // 100% ring — weakest
-    float totalW = 0.0;
-    float accum = 0.0;
-    for (int ring = 0; ring < 4; ring++) {
-      float frac = float(ring + 1) * 0.25;
-      vec2 r = uTexelSize * uDespillDepth * frac;
-      float mn = quickKeyAlpha(vUv + vec2(r.x, 0.0));
-      mn = min(mn, quickKeyAlpha(vUv - vec2(r.x, 0.0)));
-      mn = min(mn, quickKeyAlpha(vUv + vec2(0.0, r.y)));
-      mn = min(mn, quickKeyAlpha(vUv - vec2(0.0, r.y)));
-      float w = weights[ring];
-      accum += (1.0 - mn) * w;
-      totalW += w;
-    }
-    edgeProximity = max(edgeProximity, accum / totalW);
+    float localSoftness = estimateLocalEdgeSoftness(vUv);
+    float adaptiveDepth = mix(uDespillDepth * 0.4, uDespillDepth, localSoftness);
+    float approxDistancePx = estimateApproxDistanceToBackground(vUv, adaptiveDepth);
+    // Exponential decay: concentrated near the edge, drops off sharply deeper in
+    float t = clamp(approxDistancePx / max(adaptiveDepth, 0.001), 0.0, 1.0);
+    float adaptiveProximity = exp(-t * 3.0);
+    edgeProximity = max(edgeProximity, adaptiveProximity);
   }
   float edgeMask = spillFactor * edgeProximity;
 

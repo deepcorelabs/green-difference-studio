@@ -20,11 +20,9 @@
           <span id="video-name" class="topbar-file"></span>
         </div>
         <div class="topbar-right">
-          <div class="process-group">
-            <span class="process-status" id="process-status-text">0 frames</span>
-            <div class="process-meter"><div id="processing-fill" class="process-meter-fill"></div></div>
-            <button id="process-button" class="btn btn-process" disabled>Process Frames</button>
-          </div>
+          <span class="process-status" id="process-status-text"></span>
+          <div class="process-meter"><div id="processing-fill" class="process-meter-fill"></div></div>
+          <button id="process-button" class="btn btn-process" disabled>Process</button>
 
           <div class="export-dropdown-wrap">
             <button id="export-trigger" class="btn btn-export-trigger" disabled>
@@ -32,7 +30,7 @@
               <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 7L8 3.5Z"/></svg>
             </button>
             <div class="export-dropdown" id="export-dropdown">
-              <button id="export-webm-button" class="export-item" disabled>Color WebM</button>
+              <button id="export-webm-button" class="export-item" disabled>WebM + Alpha</button>
               <button id="export-alpha-button" class="export-item" disabled>Matte WebM</button>
               <button id="export-png-button" class="export-item" disabled hidden>PNG + Alpha</button>
               <button id="export-alpha-png-button" class="export-item" disabled hidden>B&amp;W Matte PNG</button>
@@ -78,7 +76,7 @@
 
         <aside class="sidebar">
           <div class="ctrl-section">
-            <p class="ctrl-heading">Key Refinement</p>
+            <p class="ctrl-heading">Matte Shape</p>
 
             <div class="threshold-tabs">
               <button class="threshold-tab active" data-threshold-mode="simple">Simple</button>
@@ -104,24 +102,6 @@
             <div id="feather-slider" class="slider-mount"></div>
 
             <div class="ctrl-row">
-              <label>Spill Suppression</label>
-              <output id="spill-output">0.120</output>
-            </div>
-            <div id="spill-slider" class="slider-mount"></div>
-
-            <div class="ctrl-row">
-              <label>Despill Lift</label>
-              <output id="despill-output">0.080</output>
-            </div>
-            <div id="despill-slider" class="slider-mount"></div>
-
-            <div class="ctrl-row">
-              <label>Despill Depth</label>
-              <output id="despill-depth-output">0.0</output>
-            </div>
-            <div id="despill-depth-slider" class="slider-mount"></div>
-
-            <div class="ctrl-row">
               <label>Hue Range</label>
               <output id="hue-output">80 &ndash; 160</output>
             </div>
@@ -138,6 +118,28 @@
               <output id="light-output">0.05 &ndash; 0.95</output>
             </div>
             <div id="light-slider" class="slider-mount"></div>
+          </div>
+
+          <div class="ctrl-section">
+            <p class="ctrl-heading">Color Recovery</p>
+
+            <div class="ctrl-row">
+              <label>Spill Suppression</label>
+              <output id="spill-output">0.120</output>
+            </div>
+            <div id="spill-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Despill Lift</label>
+              <output id="despill-output">0.080</output>
+            </div>
+            <div id="despill-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Despill Depth</label>
+              <output id="despill-depth-output">0.0</output>
+            </div>
+            <div id="despill-depth-slider" class="slider-mount"></div>
           </div>
 
           <div class="ctrl-section">
@@ -245,6 +247,7 @@
 
     <div id="busy-overlay" class="busy-overlay" hidden>
       <div class="busy-card">
+        <div class="busy-spinner" aria-hidden="true"></div>
         <strong id="busy-title">Processing...</strong>
         <div class="busy-progress-track">
           <div id="busy-progress-fill" class="busy-progress-fill"></div>
@@ -256,6 +259,23 @@
 
     <div id="color-picker-popover" popover="auto">
       <div id="color-picker-mount"></div>
+    </div>
+
+    <div id="welcome-modal" class="welcome-overlay" hidden>
+      <div class="welcome-card">
+        <h2>Green Difference Studio</h2>
+        <p class="welcome-sub">Choose how to get started</p>
+        <div class="welcome-actions">
+          <label class="btn welcome-btn welcome-btn-browse" for="video-input">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Browse File
+          </label>
+          <button id="welcome-demo" class="btn welcome-btn welcome-btn-demo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5V18.5L18 12L8 5.5Z"/></svg>
+            Load Demo
+          </button>
+        </div>
+      </div>
     </div>
 
     <video id="source-video" crossorigin="anonymous" playsinline muted hidden></video>
