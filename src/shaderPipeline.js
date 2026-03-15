@@ -198,27 +198,59 @@ float applyFeather(vec2 uv, float alpha) {
 }
 
 float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float mode) {
-  float trackerAlpha = quickKeyAlpha(trackerUv);
-  float pixelAlpha = quickKeyAlpha(pixelUv);
+  // Aspect-correct distance for falloff
+  vec2 aspect = vec2(1.0, uTexelSize.x / uTexelSize.y);
+  float dist = length((pixelUv - trackerUv) * aspect);
 
-  float steps = 16.0;
+  // Distance-based power: closer to center = stronger effect
+  // Normalize: ~0.5 in UV is roughly half the screen
+  float distFalloff = 1.0 - smoothstep(0.0, 0.5, dist);
+  if (distFalloff <= 0.0) return 0.0;
+
+  float steps = 24.0;
 
   if (mode > 0.5) {
-    // Keep: path must stay opaque. Check min alpha along ray + pixel itself.
-    float minPath = trackerAlpha;
-    for (float s = 1.0; s <= 16.0; s += 1.0) {
-      minPath = min(minPath, quickKeyAlpha(mix(trackerUv, pixelUv, s / steps)));
+    // Keep: march from tracker to pixel, accumulate how "opaque" the path is.
+    // Use average alpha along path instead of min — more tolerant of thin edges.
+    float sumAlpha = 0.0;
+    float minAlpha = 1.0;
+    for (float s = 0.0; s <= 24.0; s += 1.0) {
+      float a = quickKeyAlpha(mix(trackerUv, pixelUv, s / steps));
+      sumAlpha += a;
+      minAlpha = min(minAlpha, a);
     }
-    return smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, minPath)
-         * smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, pixelAlpha);
+    float avgAlpha = sumAlpha / (steps + 1.0);
+
+    // Blend between avg and min based on threshold — higher threshold = more tolerant
+    float pathScore = mix(minAlpha, avgAlpha, clamp(uTrackerThreshold * 4.0, 0.0, 1.0));
+
+    // Soft threshold on path score
+    float pathPass = smoothstep(0.3 - uTrackerThreshold, 0.3 + uTrackerThreshold, pathScore);
+
+    // Pixel itself must be reasonably opaque (soft edge tolerance)
+    float pixelAlpha = quickKeyAlpha(pixelUv);
+    float pixelPass = smoothstep(0.2 - uTrackerThreshold, 0.5, pixelAlpha);
+
+    return pathPass * pixelPass * distFalloff;
   } else {
-    // Discard: path must stay transparent. Check max alpha along ray + pixel itself.
-    float maxPath = trackerAlpha;
-    for (float s = 1.0; s <= 16.0; s += 1.0) {
-      maxPath = max(maxPath, quickKeyAlpha(mix(trackerUv, pixelUv, s / steps)));
+    // Discard: march from tracker to pixel, check path stays transparent.
+    float sumAlpha = 0.0;
+    float maxAlpha = 0.0;
+    for (float s = 0.0; s <= 24.0; s += 1.0) {
+      float a = quickKeyAlpha(mix(trackerUv, pixelUv, s / steps));
+      sumAlpha += a;
+      maxAlpha = max(maxAlpha, a);
     }
-    return (1.0 - smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, maxPath))
-         * (1.0 - smoothstep(0.5 - uTrackerThreshold, 0.5 + uTrackerThreshold, pixelAlpha));
+    float avgAlpha = sumAlpha / (steps + 1.0);
+
+    float pathScore = mix(maxAlpha, avgAlpha, clamp(uTrackerThreshold * 4.0, 0.0, 1.0));
+
+    float pathPass = 1.0 - smoothstep(0.7 - uTrackerThreshold, 0.7 + uTrackerThreshold, pathScore);
+
+    float pixelAlpha = quickKeyAlpha(pixelUv);
+    float pixelPass = 1.0 - smoothstep(0.5, 0.8 + uTrackerThreshold, pixelAlpha);
+
+    return pathPass * pixelPass * distFalloff;
   }
 }
 

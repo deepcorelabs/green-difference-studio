@@ -1,6 +1,7 @@
 import "nouislider/dist/nouislider.css";
 import "./styles.css";
 
+import { gsap } from "gsap";
 import iro from "@jaames/iro";
 import noUiSlider from "nouislider";
 import { Muxer, ArrayBufferTarget } from "webm-muxer";
@@ -84,6 +85,9 @@ const el = {
   trackerList: document.querySelector("#tracker-list"),
   countdownOverlay: document.querySelector("#countdown-overlay"),
   countdownNumber: document.querySelector("#countdown-number"),
+  trackerOverlay: document.querySelector("#tracker-overlay"),
+  trackerOverlayProcessed: document.querySelector("#tracker-overlay-processed"),
+  keyframeLane: document.querySelector("#keyframe-lane"),
 };
 
 const sourceCtx = el.sourceCanvas.getContext("2d", { alpha: false });
@@ -536,14 +540,18 @@ function findNearestCacheFrame(time) {
 function scrubTo(ratio) {
   lastScrubRatio = ratio;
   setPlayhead(ratio);
-  el.currentTime.textContent = formatTime(ratio * state.duration);
+  const scrubTime = ratio * state.duration;
+  el.currentTime.textContent = formatTime(scrubTime);
 
   if (state.frameCache.length > 0) {
-    const frame = findNearestCacheFrame(ratio * state.duration);
+    const frame = findNearestCacheFrame(scrubTime);
     if (frame) {
       sourceCtx.clearRect(0, 0, state.width, state.height);
       sourceCtx.drawImage(frame.bitmap, 0, 0, state.width, state.height);
+      drawTrackerOverlays(scrubTime);
+      syncTrackerUniformsAt(scrubTime);
       renderer.renderPreview();
+      updateTrackerIndicators(scrubTime);
     }
   }
 }
@@ -696,32 +704,30 @@ function drawSourceFrame() {
   drawTrackerOverlays();
 }
 
-function drawTrackerOverlays() {
+function drawTrackerOverlays(timeOverride) {
   if (!state.trackers.length) return;
+  const time = timeOverride != null ? timeOverride : (state.isImage ? 0 : (el.sourceVideo ? el.sourceVideo.currentTime : 0));
   for (const tracker of state.trackers) {
     if (tracker.samples.length < 2) continue;
+    // Only draw trail up to current time (history)
+    const trailSamples = tracker.samples.filter((s) => s.t <= time);
+    if (trailSamples.length < 1) continue;
     sourceCtx.save();
-    sourceCtx.strokeStyle = "rgba(114, 255, 159, 0.7)";
-    sourceCtx.lineWidth = 2;
+    sourceCtx.strokeStyle = "rgba(114, 255, 159, 0.45)";
+    sourceCtx.lineWidth = 1.5;
     sourceCtx.lineJoin = "round";
-    sourceCtx.beginPath();
-    const s0 = tracker.samples[0];
-    sourceCtx.moveTo(s0.x * state.width, s0.y * state.height);
-    for (let i = 1; i < tracker.samples.length; i++) {
-      const s = tracker.samples[i];
-      sourceCtx.lineTo(s.x * state.width, s.y * state.height);
+    if (trailSamples.length > 1) {
+      sourceCtx.beginPath();
+      sourceCtx.moveTo(trailSamples[0].x * state.width, trailSamples[0].y * state.height);
+      for (let i = 1; i < trailSamples.length; i++) {
+        sourceCtx.lineTo(trailSamples[i].x * state.width, trailSamples[i].y * state.height);
+      }
+      sourceCtx.stroke();
     }
-    sourceCtx.stroke();
-    // Draw start and end dots
-    const first = tracker.samples[0];
-    const last = tracker.samples[tracker.samples.length - 1];
-    sourceCtx.fillStyle = "rgba(114, 255, 159, 0.9)";
+    // Draw start dot
+    sourceCtx.fillStyle = "rgba(114, 255, 159, 0.7)";
     sourceCtx.beginPath();
-    sourceCtx.arc(first.x * state.width, first.y * state.height, 4, 0, Math.PI * 2);
-    sourceCtx.fill();
-    sourceCtx.fillStyle = "rgba(255, 100, 100, 0.9)";
-    sourceCtx.beginPath();
-    sourceCtx.arc(last.x * state.width, last.y * state.height, 4, 0, Math.PI * 2);
+    sourceCtx.arc(trailSamples[0].x * state.width, trailSamples[0].y * state.height, 3, 0, Math.PI * 2);
     sourceCtx.fill();
     sourceCtx.restore();
   }
@@ -732,6 +738,7 @@ function drawCurrentFrame() {
   syncTrackerUniforms();
   drawSourceFrame();
   renderer.renderPreview();
+  updateTrackerIndicators();
   if (!state.isImage) updateTimeline(el.sourceVideo.currentTime);
 }
 
@@ -1388,6 +1395,8 @@ setKeyMode("auto");
 function renderTrackerList() {
   if (!state.trackers.length) {
     el.trackerList.innerHTML = "";
+    refreshTrackerIndicatorElements();
+    renderKeyframeLane();
     return;
   }
   el.trackerList.innerHTML = state.trackers
@@ -1402,6 +1411,8 @@ function renderTrackerList() {
       </div>`,
     )
     .join("");
+  refreshTrackerIndicatorElements();
+  renderKeyframeLane();
 }
 
 function getTrackerPositionAtTime(tracker, time) {
@@ -1419,8 +1430,7 @@ function getTrackerPositionAtTime(tracker, time) {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
 }
 
-function syncTrackerUniforms() {
-  const time = state.isImage ? 0 : el.sourceVideo.currentTime;
+function syncTrackerUniformsAt(time) {
   const active = [];
   for (const tracker of state.trackers) {
     if (tracker.mode === "off" || !tracker.samples.length) continue;
@@ -1429,6 +1439,217 @@ function syncTrackerUniforms() {
     if (active.length >= 4) break;
   }
   renderer.updateTrackers(active, 0.15);
+}
+
+function syncTrackerUniforms() {
+  const time = state.isImage ? 0 : el.sourceVideo.currentTime;
+  syncTrackerUniformsAt(time);
+}
+
+// ── Tracker Overlay Indicators ──
+
+const trackerIndicators = new Map();
+const trackerIndicatorsProcessed = new Map();
+
+function syncOverlayToCanvas(overlay, canvas) {
+  if (!overlay || !canvas) return;
+  const wrap = canvas.parentElement;
+  const wrapRect = wrap.getBoundingClientRect();
+  const canvasRect = canvas.getBoundingClientRect();
+  overlay.style.width = `${canvasRect.width}px`;
+  overlay.style.height = `${canvasRect.height}px`;
+  overlay.style.left = `${canvasRect.left - wrapRect.left}px`;
+  overlay.style.top = `${canvasRect.top - wrapRect.top}px`;
+}
+
+function syncOverlaySize() {
+  syncOverlayToCanvas(el.trackerOverlay, el.sourceCanvas);
+  syncOverlayToCanvas(el.trackerOverlayProcessed, el.processedCanvas);
+  updateTrackerIndicators();
+}
+
+const overlayResizeObserver = new ResizeObserver(syncOverlaySize);
+overlayResizeObserver.observe(el.sourceCanvas);
+overlayResizeObserver.observe(el.processedCanvas);
+
+function refreshTrackerIndicatorElements() {
+  for (const [, data] of trackerIndicators) data.el.remove();
+  trackerIndicators.clear();
+  for (const [, data] of trackerIndicatorsProcessed) data.el.remove();
+  trackerIndicatorsProcessed.clear();
+  updateTrackerIndicators();
+}
+
+function renderKeyframeLane() {
+  const lane = el.keyframeLane;
+  if (!lane) return;
+  lane.innerHTML = "";
+  if (!state.trackers.length || !state.duration) {
+    lane.classList.remove("visible");
+    return;
+  }
+  lane.classList.add("visible");
+  for (let i = 0; i < state.trackers.length; i++) {
+    const tracker = state.trackers[i];
+    if (tracker.samples.length < 2) continue;
+    const row = document.createElement("div");
+    row.className = "kf-row";
+    // Thin out ticks: show at most ~200 per tracker
+    const step = Math.max(1, Math.floor(tracker.samples.length / 200));
+    for (let j = 0; j < tracker.samples.length; j += step) {
+      const s = tracker.samples[j];
+      const pct = (s.t / state.duration) * 100;
+      const tick = document.createElement("div");
+      tick.className = "kf-tick";
+      tick.dataset.mode = tracker.mode;
+      tick.style.left = `${pct}%`;
+      row.appendChild(tick);
+    }
+    lane.appendChild(row);
+  }
+}
+
+function updateIndicatorsForOverlay(overlay, indicatorMap, time, draggable) {
+  if (!overlay) return;
+  const ow = overlay.offsetWidth;
+  const oh = overlay.offsetHeight;
+  if (!ow || !oh) return;
+
+  for (const [idx, data] of indicatorMap) {
+    if (idx >= state.trackers.length) {
+      data.el.remove();
+      indicatorMap.delete(idx);
+    }
+  }
+
+  for (let i = 0; i < state.trackers.length; i++) {
+    const tracker = state.trackers[i];
+    const pos = getTrackerPositionAtTime(tracker, time);
+    if (!pos) {
+      if (indicatorMap.has(i)) indicatorMap.get(i).el.style.display = "none";
+      continue;
+    }
+
+    let data = indicatorMap.get(i);
+    if (!data) {
+      const div = document.createElement("div");
+      div.className = "tracker-indicator";
+      div.textContent = String(i + 1);
+      div.dataset.trackerIdx = i;
+      if (!draggable) { div.style.cursor = "default"; div.style.pointerEvents = "none"; }
+      overlay.appendChild(div);
+      data = { el: div, lastX: null, lastY: null };
+      indicatorMap.set(i, data);
+      if (draggable) setupIndicatorDrag(div, i);
+    }
+
+    data.el.dataset.mode = tracker.mode;
+    data.el.textContent = String(i + 1);
+    data.el.style.display = "";
+    const frame = state.fps ? timeToFrame(time, state.fps) : 0;
+    data.el.title = `${tracker.name} — Frame ${frame}`;
+
+    const targetX = pos.x * ow;
+    const targetY = pos.y * oh;
+
+    if (data.lastX === null) {
+      gsap.set(data.el, { left: targetX, top: targetY });
+    } else {
+      gsap.to(data.el, {
+        left: targetX,
+        top: targetY,
+        duration: 0.15,
+        ease: "power2.out",
+        overwrite: "auto",
+      });
+    }
+    data.lastX = targetX;
+    data.lastY = targetY;
+  }
+}
+
+function updateTrackerIndicators(timeOverride) {
+  const srcOverlay = el.trackerOverlay;
+  const procOverlay = el.trackerOverlayProcessed;
+  if (state.recording) {
+    if (srcOverlay) srcOverlay.style.display = "none";
+    if (procOverlay) procOverlay.style.display = "none";
+    return;
+  }
+  if (srcOverlay) srcOverlay.style.display = "";
+  if (procOverlay) procOverlay.style.display = "";
+
+  const time = timeOverride != null ? timeOverride : (state.isImage ? 0 : (el.sourceVideo ? el.sourceVideo.currentTime : 0));
+  updateIndicatorsForOverlay(srcOverlay, trackerIndicators, time, true);
+  updateIndicatorsForOverlay(procOverlay, trackerIndicatorsProcessed, time, false);
+}
+
+function setupIndicatorDrag(indicatorEl, trackerIdx) {
+  const moveToPointer = (e) => {
+    const overlay = el.trackerOverlay;
+    const rect = overlay.getBoundingClientRect();
+    const normX = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+    const normY = clamp((e.clientY - rect.top) / rect.height, 0, 1);
+    gsap.set(indicatorEl, {
+      left: normX * rect.width,
+      top: normY * rect.height,
+    });
+    updateTrackerSampleAtCurrentTime(trackerIdx, normX, normY);
+  };
+
+  const onPointerDown = (e) => {
+    if (state.playing || state.recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    indicatorEl.classList.add("dragging");
+    indicatorEl.setPointerCapture(e.pointerId);
+    moveToPointer(e);
+    indicatorEl.addEventListener("pointermove", onPointerMove);
+    indicatorEl.addEventListener("pointerup", onPointerUp);
+  };
+
+  const onPointerMove = (e) => {
+    moveToPointer(e);
+  };
+
+  const onPointerUp = (e) => {
+    indicatorEl.classList.remove("dragging");
+    indicatorEl.releasePointerCapture(e.pointerId);
+    indicatorEl.removeEventListener("pointermove", onPointerMove);
+    indicatorEl.removeEventListener("pointerup", onPointerUp);
+    syncTrackerUniforms();
+    drawCurrentFrame();
+  };
+
+  indicatorEl.addEventListener("pointerdown", onPointerDown);
+}
+
+function updateTrackerSampleAtCurrentTime(trackerIdx, normX, normY) {
+  const tracker = state.trackers[trackerIdx];
+  if (!tracker) return;
+  const time = state.isImage ? 0 : el.sourceVideo.currentTime;
+  const samples = tracker.samples;
+  const SNAP_THRESHOLD = state.fps > 0 ? 1 / (state.fps * 2) : 0.02;
+
+  let closestIdx = 0;
+  let closestDist = Infinity;
+  for (let i = 0; i < samples.length; i++) {
+    const dist = Math.abs(samples[i].t - time);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closestIdx = i;
+    }
+  }
+
+  if (closestDist < SNAP_THRESHOLD) {
+    samples[closestIdx].x = normX;
+    samples[closestIdx].y = normY;
+  } else {
+    const newSample = { t: time, x: normX, y: normY };
+    let insertIdx = samples.findIndex((s) => s.t > time);
+    if (insertIdx === -1) insertIdx = samples.length;
+    samples.splice(insertIdx, 0, newSample);
+  }
 }
 
 el.trackerList.addEventListener("click", (e) => {

@@ -351,6 +351,7 @@ html, body {
 .viewer-wrap {
   flex: 1;
   min-height: 0;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -816,6 +817,49 @@ html, body {
   gap: 8px;
 }
 
+.keyframe-lane {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  background: rgba(10, 14, 18, 0.6);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: none;
+  overflow: hidden;
+  display: none;
+}
+
+.keyframe-lane.visible {
+  display: block;
+}
+
+.keyframe-lane .kf-row {
+  position: absolute;
+  inset: 0;
+}
+
+.keyframe-lane .kf-tick {
+  position: absolute;
+  top: 2px;
+  width: 4px;
+  height: 10px;
+  margin-left: -2px;
+  border-radius: 1px;
+  opacity: 0.7;
+}
+
+.keyframe-lane .kf-tick[data-mode="keep"] {
+  background: var(--accent);
+}
+
+.keyframe-lane .kf-tick[data-mode="discard"] {
+  background: #ff5050;
+}
+
+.keyframe-lane .kf-tick[data-mode="off"] {
+  background: #666;
+}
+
 .timeline-container {
   position: relative;
   width: 100%;
@@ -1265,6 +1309,71 @@ html, body {
 
 .tracker-delete:hover {
   color: #ff6b6b;
+}
+
+/* ── Tracker Overlay Indicators ── */
+
+.tracker-overlay {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 5;
+}
+
+.tracker-indicator {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  margin-top: -14px;
+  border-radius: 50%;
+  background: rgba(114, 255, 159, 0.85);
+  border: 2px solid rgba(10, 26, 16, 0.8);
+  color: #0a1a10;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  box-shadow: 0 0 12px rgba(114, 255, 159, 0.4), 0 2px 6px rgba(0, 0, 0, 0.5);
+  transition: box-shadow 120ms;
+  will-change: left, top;
+}
+
+.tracker-indicator:hover {
+  box-shadow: 0 0 18px rgba(114, 255, 159, 0.6), 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.tracker-indicator.dragging {
+  cursor: grabbing;
+  box-shadow: 0 0 24px rgba(114, 255, 159, 0.8), 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 10;
+}
+
+.tracker-indicator[data-mode="discard"] {
+  background: rgba(255, 80, 80, 0.85);
+  border-color: rgba(80, 10, 10, 0.8);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(255, 80, 80, 0.4), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.tracker-indicator[data-mode="discard"]:hover {
+  box-shadow: 0 0 18px rgba(255, 80, 80, 0.6), 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+.tracker-indicator[data-mode="discard"].dragging {
+  box-shadow: 0 0 24px rgba(255, 80, 80, 0.8), 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.tracker-indicator[data-mode="off"] {
+  background: rgba(120, 120, 120, 0.6);
+  border-color: rgba(60, 60, 60, 0.8);
+  color: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 6px rgba(120, 120, 120, 0.3), 0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
 .app.tracker-recording .viewer-wrap,

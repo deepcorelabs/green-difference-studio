@@ -51,6 +51,7 @@
             </div>
             <div class="viewer-wrap">
               <canvas id="source-canvas" class="viewer-canvas"></canvas>
+              <div class="tracker-overlay" id="tracker-overlay"></div>
             </div>
             <div id="drop-hint" class="drop-hint">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -70,6 +71,7 @@
             </div>
             <div class="viewer-wrap">
               <canvas id="processed-canvas" class="viewer-canvas"></canvas>
+              <div class="tracker-overlay" id="tracker-overlay-processed"></div>
             </div>
           </div>
         </div>
@@ -203,6 +205,7 @@
       </div>
 
       <footer class="bottombar">
+        <div class="keyframe-lane" id="keyframe-lane"></div>
         <div class="timeline-container" id="timeline-container">
           <canvas id="timeline-thumbs" class="timeline-thumbs"></canvas>
           <canvas id="timeline-buffer" class="timeline-buffer"></canvas>
