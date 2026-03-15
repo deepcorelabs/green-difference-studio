@@ -29,7 +29,7 @@ Thumbs.db
 .vite/
 
 # Large media files (use GitHub Releases for demo assets)
-input.mp4
+demo.mp4
 *.mp4
 
 # Test files

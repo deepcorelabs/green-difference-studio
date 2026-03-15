@@ -3,7 +3,7 @@
 A browser-based chroma key (green screen) video processor with real-time preview, GPU-accelerated rendering, and WebM export with alpha transparency.
 
 <!-- Replace with an actual screenshot or screen recording -->
-![Demo](https://via.placeholder.com/1200x600/0a0e12/72ff9f?text=Demo+Screenshot+Here)
+![Demo](https://deepcorelabs.com/tools/green-difference-studio/)
 
 ## Features
 
@@ -28,8 +28,8 @@ A browser-based chroma key (green screen) video processor with real-time preview
 
 ### Trackers
 
-- **Mouse Tracker** — place a static tracker point, drag to reposition on any frame
-- **Tween Tracker** — record a moving tracker by playing the video and holding mouse on the subject
+- **Tween Tracker** — place a static tracker point, drag to reposition on any frame
+- **Mouse Tracker** — record a moving tracker by playing the video and holding first mouse button on the subject (mouse up is off)
 - Per-tracker **Keep** / **Discard** modes with flood-fill-based alpha masking
 - **Auto Invert Remaining** — automatically discard (or keep) everything outside the tracked region
 - **Tolerance** control per tracker for fine-tuning flood fill sensitivity
@@ -138,6 +138,7 @@ Want to help improve this tool? Here's the current roadmap — PRs and ideas wel
 4. **Undo/Redo** — Full history stack for all parameter changes, tracker edits, and mask operations
 5. **Worker-based flood fill** — Offload the CPU-heavy tracker flood fill and distance field computation to Web Workers for faster processing on multi-core machines
 6. **Batch processing** — Queue multiple videos and process them sequentially with saved presets
+7. **CorridorKey in the browser** — one can dream... 😏
 
 ## License
 
