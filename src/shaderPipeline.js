@@ -163,22 +163,53 @@ float applyFeather(vec2 uv, float alpha) {
   return total / 9.0;
 }
 
-// Alpha-threshold region membership. No ray marching, no distance dependency.
-// The tracker samples a reference alpha; mode decides direction:
-//   keep  (mode > 0): affect pixels with alpha >= (ref - strength)
-//   discard (mode < 0): affect pixels with alpha <= (ref + strength)
+float alphaSimilarity(float a, float b, float strength) {
+  return 1.0 - smoothstep(strength, strength * 2.0, abs(a - b));
+}
+
+// Fixed number of steps per segment so connectivity does not depend on distance (no fake radial).
+// Same step density for near and far pixels = true contiguous region, not a distance falloff.
+float pathConfidence(vec2 fromUv, vec2 toUv, float strength) {
+  const float steps = 64.0;
+  float pathMin = 1.0;
+  vec2 prevUv = fromUv;
+  for (float s = 1.0; s <= 64.0; s += 1.0) {
+    vec2 currUv = mix(fromUv, toUv, s / steps);
+    float prevA = quickKeyAlpha(prevUv);
+    float currA = quickKeyAlpha(currUv);
+    pathMin = min(pathMin, alphaSimilarity(prevA, currA, strength));
+    prevUv = currUv;
+  }
+  return smoothstep(0.2, 0.8, pathMin);
+}
+
+// Flood-fill style: pixel is connected if ANY path from tracker is contiguous
+// (direct or L-shaped), so we don't get a single-ray "cone" / radial falloff.
 float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float strength, float mode) {
   float refAlpha   = quickKeyAlpha(trackerUv);
   float pixelAlpha = quickKeyAlpha(pixelUv);
   float edge = max(strength * 0.35, 0.02);
 
+  float inRange = 0.0;
   if (mode > 0.5) {
     float cutoff = refAlpha - strength;
-    return smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
+    inRange = smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
   } else {
     float cutoff = refAlpha + strength;
-    return 1.0 - smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
+    inRange = 1.0 - smoothstep(cutoff - edge, cutoff + edge, pixelAlpha);
   }
+
+  if (inRange < 0.01) return 0.0;
+
+  // Multiple routes: direct, L via (pixel.x, tracker.y), L via (tracker.x, pixel.y)
+  vec2 viaX = vec2(pixelUv.x, trackerUv.y);
+  vec2 viaY = vec2(trackerUv.x, pixelUv.y);
+  float cDirect = pathConfidence(trackerUv, pixelUv, strength);
+  float cViaX   = min(pathConfidence(trackerUv, viaX, strength), pathConfidence(viaX, pixelUv, strength));
+  float cViaY   = min(pathConfidence(trackerUv, viaY, strength), pathConfidence(viaY, pixelUv, strength));
+  float pathConf = max(cDirect, max(cViaX, cViaY));
+
+  return inRange * pathConf;
 }
 
 void main() {
@@ -274,8 +305,8 @@ export class ChromaKeyRenderer {
     this.uniforms = {
       uTexture: { value: null },
       uCurveLUT: { value: this.curveLUTTexture },
-      uSpillSuppression: { value: 0.12 },
-      uDespillLift: { value: 0.08 },
+      uSpillSuppression: { value: 2 },
+      uDespillLift: { value: 1 },
       uChoke: { value: 0 },
       uFeather: { value: 0 },
       uViewMode: { value: 0 },
@@ -284,7 +315,7 @@ export class ChromaKeyRenderer {
       uSampleSimilarity: { value: 0.1 },
       uKeyColors: { value: Array.from({ length: 5 }, () => new THREE.Vector3(0, 1, 0)) },
       uTexelSize: { value: new THREE.Vector2(1 / this.size.width, 1 / this.size.height) },
-      uDespillDepth: { value: 0 },
+      uDespillDepth: { value: 5 },
       uTrackerPositions: { value: Array.from({ length: 4 }, () => new THREE.Vector2(0, 0)) },
       uTrackerModes: { value: new Float32Array(4) },
       uTrackerStrengths: { value: new Float32Array([0.15, 0.15, 0.15, 0.15]) },
@@ -401,6 +432,33 @@ export class ChromaKeyRenderer {
       const color = settings.keyColors?.[i] ?? [0, 1, 0];
       this.uniforms.uKeyColors.value[i].set(color[0], color[1], color[2]);
     }
+  }
+
+  renderPreviewFromCanvas(canvas, { viewModeOverride } = {}) {
+    if (!this._scrubTexture) {
+      this._scrubTexture = new THREE.CanvasTexture(canvas);
+      this._scrubTexture.colorSpace = THREE.NoColorSpace;
+      this._scrubTexture.minFilter = THREE.LinearFilter;
+      this._scrubTexture.magFilter = THREE.LinearFilter;
+      this._scrubTexture.generateMipmaps = false;
+    } else {
+      this._scrubTexture.image = canvas;
+    }
+    this._scrubTexture.needsUpdate = true;
+
+    const prev = this.uniforms.uTexture.value;
+    const previousViewMode = this.uniforms.uViewMode.value;
+    if (typeof viewModeOverride === "number") {
+      this.uniforms.uViewMode.value = viewModeOverride;
+    }
+
+    this.uniforms.uTexture.value = this._scrubTexture;
+    this.renderer.render(this.scene, this.camera);
+    this.processedContext.clearRect(0, 0, this.size.width, this.size.height);
+    this.processedContext.drawImage(this.renderer.domElement, 0, 0, this.size.width, this.size.height);
+
+    this.uniforms.uTexture.value = prev;
+    this.uniforms.uViewMode.value = previousViewMode;
   }
 
   renderPreview({ viewModeOverride } = {}) {

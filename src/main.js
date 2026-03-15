@@ -167,21 +167,21 @@ const thresholdSlider = noUiSlider.create(document.querySelector("#threshold-sli
 });
 
 const spillSlider = noUiSlider.create(document.querySelector("#spill-slider"), {
-  start: [0.12],
+  start: [2],
   connect: [true, false],
   range: { min: 0, max: 2 },
   step: 0.001,
 });
 
 const despillSlider = noUiSlider.create(document.querySelector("#despill-slider"), {
-  start: [0.08],
+  start: [1],
   connect: [true, false],
   range: { min: 0, max: 1 },
   step: 0.001,
 });
 
 const despillDepthSlider = noUiSlider.create(document.querySelector("#despill-depth-slider"), {
-  start: [0],
+  start: [5],
   connect: [true, false],
   range: { min: 0, max: 60 },
   step: 0.5,
@@ -551,9 +551,9 @@ function scrubTo(ratio) {
     if (frame) {
       sourceCtx.clearRect(0, 0, state.width, state.height);
       sourceCtx.drawImage(frame.bitmap, 0, 0, state.width, state.height);
-      drawTrackerOverlays(scrubTime);
       syncTrackerUniformsAt(scrubTime);
-      renderer.renderPreview();
+      renderer.renderPreviewFromCanvas(el.sourceCanvas);
+      drawTrackerOverlays(scrubTime);
       updateTrackerIndicators(scrubTime);
     }
   }
@@ -565,7 +565,11 @@ function onTLDown(e) {
   state.scrubbing = true;
   el.timelineContainer.classList.add("scrubbing");
   if (state.playing) { state.playing = false; el.sourceVideo.pause(); cancelPlaybackLoop(); updateButtons(); }
-  scrubTo(timelineRatio(e));
+  const ratio = timelineRatio(e);
+  const currentRatio = state.duration > 0 ? clamp(el.sourceVideo.currentTime / state.duration, 0, 1) : 0;
+  const threshold = state.frameCache.length > 1 ? 0.5 / state.frameCache.length : 0.01;
+  const useRatio = Math.abs(ratio - currentRatio) <= threshold ? currentRatio : ratio;
+  scrubTo(useRatio);
   const onMove = (ev) => { ev.preventDefault(); scrubTo(timelineRatio(ev)); };
   const onUp = () => {
     state.scrubbing = false;
@@ -629,9 +633,13 @@ async function buildFrameCache() {
 
     if (state.duration > 0) {
       const p = meta.mediaTime / state.duration;
-      setBusyProgress(p, state.frameCache.length, approxTotal);
-      el.busyDetail.textContent = `Frame ${state.frameCache.length} / ~${approxTotal}`;
+      const liveTotal = meta.mediaTime > 0.01
+        ? Math.round(state.frameCache.length / (meta.mediaTime / state.duration))
+        : approxTotal;
+      setBusyProgress(p, state.frameCache.length, liveTotal);
     }
+
+    if (state.frameCache.length % 8 === 0) await nextPaint();
   }
 
   // Derive real FPS/frame count from what we actually got
@@ -641,9 +649,15 @@ async function buildFrameCache() {
     updateMeta();
   }
 
-  hideBusy();
+  setBusyMessage("Finalizing", "Building thumbnails...");
+  await nextPaint();
   buildThumbnailsFromCache();
+
+  setBusyMessage(null, "Seeking to start...");
+  await nextPaint();
   await seekVideo(0);
+
+  hideBusy();
 }
 
 function buildThumbnailsFromCache() {
@@ -1196,6 +1210,11 @@ el.replaceMediaButton.addEventListener("click", (event) => {
   event.stopPropagation();
   el.videoInput.click();
 });
+el.dropHint.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  el.videoInput.click();
+});
 ["dragenter", "dragover"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.add("drag-active"); }));
 ["dragleave", "dragend"].forEach((n) => el.sourceDropZone.addEventListener(n, (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); }));
 el.sourceDropZone.addEventListener("drop", (e) => { e.preventDefault(); el.sourceDropZone.classList.remove("drag-active"); handleFile(e.dataTransfer?.files?.[0]); });
@@ -1565,7 +1584,7 @@ function syncOverlayToCanvas(overlay, canvas) {
 function syncOverlaySize() {
   syncOverlayToCanvas(el.trackerOverlay, el.sourceCanvas);
   syncOverlayToCanvas(el.trackerOverlayProcessed, el.processedCanvas);
-  updateTrackerIndicators();
+  if (state.trackers.length) updateTrackerIndicators();
 }
 
 const overlayResizeObserver = new ResizeObserver(syncOverlaySize);
@@ -1589,6 +1608,7 @@ function renderKeyframeLane() {
     return;
   }
   lane.classList.add("visible");
+  void lane.offsetHeight; // force layout so children resolve % positions
   const dur = state.duration || 0;
   for (let i = 0; i < state.trackers.length; i++) {
     const tracker = state.trackers[i];
@@ -1831,6 +1851,9 @@ function updateTrackerIndicators(timeOverride) {
   if (srcOverlay) srcOverlay.style.display = "";
   if (procOverlay) procOverlay.style.display = "";
 
+  syncOverlayToCanvas(srcOverlay, el.sourceCanvas);
+  syncOverlayToCanvas(procOverlay, el.processedCanvas);
+
   const time = timeOverride != null ? timeOverride : (state.isImage ? 0 : (el.sourceVideo ? el.sourceVideo.currentTime : 0));
   updateIndicatorsForOverlay(srcOverlay, trackerIndicators, time, true);
   updateIndicatorsForOverlay(procOverlay, trackerIndicatorsProcessed, time, false);
@@ -1869,6 +1892,7 @@ function setupIndicatorDrag(indicatorEl, trackerIdx) {
     indicatorEl.releasePointerCapture(e.pointerId);
     indicatorEl.removeEventListener("pointermove", onPointerMove);
     indicatorEl.removeEventListener("pointerup", onPointerUp);
+    renderKeyframeLane();
     syncTrackerUniforms();
     drawCurrentFrame();
   };
@@ -2203,6 +2227,8 @@ async function loadDemoFile() {
     setStatus("Could not load demo file.");
   }
 }
+
+document.querySelector("#welcome-modal-close").addEventListener("click", () => { welcomeModal.hidden = true; });
 
 fetch("/input.mp4", { method: "HEAD" }).then((res) => {
   if (res.ok) {

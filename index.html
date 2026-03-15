@@ -127,19 +127,19 @@
 
             <div class="ctrl-row">
               <label>Spill Suppression</label>
-              <output id="spill-output">0.120</output>
+              <output id="spill-output">2.000</output>
             </div>
             <div id="spill-slider" class="slider-mount"></div>
 
             <div class="ctrl-row">
               <label>Despill Lift</label>
-              <output id="despill-output">0.080</output>
+              <output id="despill-output">1.000</output>
             </div>
             <div id="despill-slider" class="slider-mount"></div>
 
             <div class="ctrl-row">
               <label>Despill Depth</label>
-              <output id="despill-depth-output">0.0</output>
+              <output id="despill-depth-output">5.0</output>
             </div>
             <div id="despill-depth-slider" class="slider-mount"></div>
           </div>
@@ -220,7 +220,7 @@
         </div>
         <div class="transport">
           <button id="go-to-start" class="tbtn" disabled title="Go to start (Home)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM9.5 12l8.5 6V6z"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18 6v12l-6-6zm-6 0v12l-6-6z"/></svg>
           </button>
           <button id="step-backward" class="tbtn" disabled title="Previous frame (Left Arrow)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
@@ -273,36 +273,39 @@
       <div id="color-picker-mount"></div>
     </div>
 
-    <div id="welcome-modal" class="welcome-overlay" hidden>
-      <div class="welcome-card">
+    <div id="welcome-modal" class="modal-overlay" hidden>
+      <div class="modal-card">
+        <button type="button" id="welcome-modal-close" class="modal-close" title="Close" aria-label="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
         <h2>Green Difference Studio</h2>
-        <p class="welcome-sub">Choose how to get started</p>
-        <div class="welcome-actions">
-          <label class="btn welcome-btn welcome-btn-browse" for="video-input">
+        <p class="modal-sub">Choose how to get started</p>
+        <div class="modal-actions">
+          <label class="btn modal-btn modal-btn-green" for="video-input">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             Browse File
           </label>
-          <button id="welcome-demo" class="btn welcome-btn welcome-btn-demo">
+          <button id="welcome-demo" class="btn modal-btn modal-btn-gray">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5V18.5L18 12L8 5.5Z"/></svg>
-            Load Demo
+            Load Demo 🥕
           </button>
         </div>
       </div>
     </div>
 
-    <div id="tracker-instructions" class="welcome-overlay" hidden>
-      <div class="welcome-card">
+    <div id="tracker-instructions" class="modal-overlay" hidden>
+      <div class="modal-card">
         <h2>Record Tracker</h2>
-        <p class="welcome-sub">How to track</p>
+        <p class="modal-sub">How to track</p>
         <div class="tracker-instructions-body">
           <p><strong>Press and hold mouse button</strong> on either viewer to track.</p>
           <p>Don't release unless you need to reposition.</p>
           <p>Video starts on first click. Plays at 0.5x speed.</p>
           <p>Gaps are interpolated automatically.</p>
         </div>
-        <div class="welcome-actions">
-          <button id="tracker-instructions-cancel" class="btn welcome-btn welcome-btn-browse">Cancel</button>
-          <button id="tracker-instructions-start" class="btn welcome-btn welcome-btn-demo">Ready</button>
+        <div class="modal-actions">
+          <button id="tracker-instructions-cancel" class="btn modal-btn modal-btn-gray">Cancel</button>
+          <button id="tracker-instructions-start" class="btn modal-btn modal-btn-green">Ready</button>
         </div>
       </div>
     </div>

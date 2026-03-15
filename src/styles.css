@@ -406,15 +406,22 @@ html, body {
 
 .drop-hint {
   position: absolute;
-  inset: 0;
+  inset: 12px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  pointer-events: none;
+  pointer-events: auto;
   z-index: 2;
   color: var(--text);
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.drop-hint:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
 }
 
 .drop-hint svg { opacity: 0.35; color: var(--accent); }
@@ -423,6 +430,7 @@ html, body {
 
 .viewer.has-video .drop-hint {
   opacity: 0;
+  pointer-events: none;
 }
 
 /* ── Sidebar ── */
@@ -845,7 +853,6 @@ html, body {
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-bottom: none;
-  overflow: hidden;
   display: none;
 }
 
@@ -881,6 +888,7 @@ html, body {
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: visible;
 }
 
 .tracker-on-bar {
@@ -927,7 +935,7 @@ html, body {
 
 .kf-diamond {
   position: absolute;
-  top: 50%;
+  top: 6px;
   width: 8px;
   height: 8px;
   margin-left: -4px;
@@ -953,6 +961,7 @@ html, body {
 }
 
 .kf-diamond.kf-diamond-onoff {
+  top: 16px;
   background: #ffdd33;
   border-color: rgba(0, 0, 0, 0.5);
 }
@@ -1228,9 +1237,9 @@ html, body {
   to { transform: rotate(360deg); }
 }
 
-/* ── Welcome Modal ── */
+/* ── Modals ── */
 
-.welcome-overlay {
+.modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 1001;
@@ -1241,9 +1250,10 @@ html, body {
   backdrop-filter: blur(8px);
 }
 
-.welcome-overlay[hidden] { display: none; }
+.modal-overlay[hidden] { display: none; }
 
-.welcome-card {
+.modal-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1256,25 +1266,48 @@ html, body {
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
 
-.welcome-card h2 {
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-close:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.modal-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.modal-card h2 {
   font-family: "Syne", sans-serif;
   font-size: 1.3rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 
-.welcome-sub {
+.modal-sub {
   color: var(--muted);
   font-size: 13px;
   margin-bottom: 4px;
 }
 
-.welcome-actions {
+.modal-actions {
   display: flex;
   gap: 12px;
 }
 
-.welcome-btn {
+.modal-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1285,7 +1318,7 @@ html, body {
   cursor: pointer;
 }
 
-.welcome-btn-demo {
+.modal-btn-green {
   color: #0a1a10;
   border-color: rgba(114, 255, 159, 0.7);
   background: linear-gradient(180deg, rgba(114, 255, 159, 0.92) 0%, rgba(62, 210, 120, 0.85) 100%);
@@ -1295,7 +1328,7 @@ html, body {
     0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-.welcome-btn-demo:hover {
+.modal-btn-green:hover {
   color: #ffffff;
   background: linear-gradient(180deg, rgba(60, 180, 100, 0.95) 0%, rgba(40, 150, 80, 0.9) 100%);
   box-shadow:
@@ -1304,7 +1337,7 @@ html, body {
     0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
-.welcome-btn-browse {
+.modal-btn-gray {
   color: var(--text);
   border: 1px solid var(--border);
   background: linear-gradient(180deg, #29292985 0%, #23232300 100%);
@@ -1313,7 +1346,7 @@ html, body {
     0 4px 4px rgba(0, 0, 0, 0.28);
 }
 
-.welcome-btn-browse:hover {
+.modal-btn-gray:hover {
   border-color: rgba(255, 255, 255, 0.16);
   background: linear-gradient(180deg, #34343490 0%, #28282810 100%);
 }
