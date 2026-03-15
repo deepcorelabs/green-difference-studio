@@ -4,6 +4,7 @@ import "./styles.css";
 import iro from "@jaames/iro";
 import noUiSlider from "nouislider";
 import { Muxer, ArrayBufferTarget } from "webm-muxer";
+import { CurveEditor } from "./curveEditor.js";
 import { detectExportSupport } from "./export.js";
 import { ChromaKeyRenderer } from "./shaderPipeline.js";
 import {
@@ -53,10 +54,15 @@ const el = {
   timelinePlayed: document.querySelector("#timeline-played"),
   timelinePlayhead: document.querySelector("#timeline-playhead"),
   thresholdOutput: document.querySelector("#threshold-output"),
+  thresholdSliderMount: document.querySelector("#threshold-slider"),
+  curveEditorMount: document.querySelector("#curve-editor-mount"),
   spillOutput: document.querySelector("#spill-output"),
   despillOutput: document.querySelector("#despill-output"),
   chokeOutput: document.querySelector("#choke-output"),
   featherOutput: document.querySelector("#feather-output"),
+  hueOutput: document.querySelector("#hue-output"),
+  satOutput: document.querySelector("#sat-output"),
+  lightOutput: document.querySelector("#light-output"),
   busyOverlay: document.querySelector("#busy-overlay"),
   busyTitle: document.querySelector("#busy-title"),
   busyDetail: document.querySelector("#busy-detail"),
@@ -116,6 +122,28 @@ const state = {
   frameCache: [],
 };
 
+// ── Threshold Mode ──
+
+let thresholdMode = "simple"; // "simple" | "advanced"
+
+const curveEditor = new CurveEditor(document.querySelector("#curve-editor-mount"), {
+  onChange: () => { if (thresholdMode === "advanced") applySettings(); },
+});
+
+function smoothstepLUT(low, high) {
+  const lut = new Uint8Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    if (t <= low) { lut[i] = 255; }
+    else if (t >= high) { lut[i] = 0; }
+    else {
+      const s = (t - low) / (high - low);
+      lut[i] = Math.round((1 - s * s * (3 - 2 * s)) * 255);
+    }
+  }
+  return lut;
+}
+
 // ── noUiSlider ──
 
 const thresholdSlider = noUiSlider.create(document.querySelector("#threshold-slider"), {
@@ -153,6 +181,27 @@ const featherSlider = noUiSlider.create(document.querySelector("#feather-slider"
   step: 0.05,
 });
 
+const hueSlider = noUiSlider.create(document.querySelector("#hue-slider"), {
+  start: [80, 160],
+  connect: true,
+  range: { min: 0, max: 360 },
+  step: 1,
+});
+
+const satSlider = noUiSlider.create(document.querySelector("#sat-slider"), {
+  start: [0.15],
+  connect: [true, false],
+  range: { min: 0, max: 1 },
+  step: 0.01,
+});
+
+const lightSlider = noUiSlider.create(document.querySelector("#light-slider"), {
+  start: [0.05, 0.95],
+  connect: true,
+  range: { min: 0, max: 1 },
+  step: 0.01,
+});
+
 const sampleSimilaritySlider = noUiSlider.create(document.querySelector("#sample-similarity-slider"), {
   start: [0.1],
   connect: [true, false],
@@ -161,14 +210,22 @@ const sampleSimilaritySlider = noUiSlider.create(document.querySelector("#sample
 });
 
 function getSettings() {
-  const [low, high] = thresholdSlider.get(true);
+  let curveLUT;
+  if (thresholdMode === "simple") {
+    const [low, high] = thresholdSlider.get(true);
+    curveLUT = smoothstepLUT(low, high);
+  } else {
+    curveLUT = curveEditor.getLUT();
+  }
   return {
-    thresholdLow: low,
-    thresholdHigh: high,
+    curveLUT,
     spillSuppression: spillSlider.get(true),
     despillLift: despillSlider.get(true),
     choke: chokeSlider.get(true),
     feather: featherSlider.get(true),
+    hueRange: hueSlider.get(true),
+    satFloor: satSlider.get(true),
+    lightRange: lightSlider.get(true),
     viewMode: state.viewMode === "alpha" ? 1 : state.viewMode === "source" ? 2 : 0,
     useSampledKey: state.keyMode === "sampled" && state.sampledColors.length > 0,
     sampleSimilarity: state.sampleSimilarity,
@@ -178,11 +235,17 @@ function getSettings() {
 
 function syncOutputs() {
   const s = getSettings();
-  el.thresholdOutput.textContent = `${s.thresholdLow.toFixed(3)} \u2013 ${s.thresholdHigh.toFixed(3)}`;
+  if (thresholdMode === "simple") {
+    const [low, high] = thresholdSlider.get(true);
+    el.thresholdOutput.textContent = `${low.toFixed(3)} \u2013 ${high.toFixed(3)}`;
+  }
   el.spillOutput.textContent = s.spillSuppression.toFixed(3);
   el.despillOutput.textContent = s.despillLift.toFixed(3);
   el.chokeOutput.textContent = s.choke.toFixed(3);
   el.featherOutput.textContent = s.feather.toFixed(2);
+  el.hueOutput.textContent = `${Math.round(s.hueRange[0])} \u2013 ${Math.round(s.hueRange[1])}`;
+  el.satOutput.textContent = s.satFloor.toFixed(2);
+  el.lightOutput.textContent = `${s.lightRange[0].toFixed(2)} \u2013 ${s.lightRange[1].toFixed(2)}`;
   el.sampleSimilarityOutput.textContent = `${(s.sampleSimilarity * 100).toFixed(1)}%`;
 }
 
@@ -201,14 +264,28 @@ function applySettings({ invalidate = true } = {}) {
   drawCurrentFrame();
 }
 
-thresholdSlider.on("update", applySettings);
+thresholdSlider.on("update", () => { if (thresholdMode === "simple") applySettings(); });
 spillSlider.on("update", applySettings);
 despillSlider.on("update", applySettings);
 chokeSlider.on("update", applySettings);
 featherSlider.on("update", applySettings);
+hueSlider.on("update", applySettings);
+satSlider.on("update", applySettings);
+lightSlider.on("update", applySettings);
 sampleSimilaritySlider.on("update", (values) => {
   state.sampleSimilarity = Number(values[0]);
   applySettings();
+});
+
+document.querySelectorAll("[data-threshold-mode]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    thresholdMode = tab.dataset.thresholdMode;
+    document.querySelectorAll("[data-threshold-mode]").forEach((t) => t.classList.toggle("active", t === tab));
+    el.thresholdSliderMount.hidden = thresholdMode !== "simple";
+    el.thresholdOutput.hidden = thresholdMode !== "simple";
+    el.curveEditorMount.hidden = thresholdMode !== "advanced";
+    applySettings();
+  });
 });
 
 // ── Helpers ──
@@ -976,17 +1053,18 @@ async function exportVideo({ alpha }) {
   setStatus(`${label} exported.`);
 }
 
-function exportImagePng({ alpha }) {
+function exportImagePng({ matte }) {
   if (!state.sourceUrl || !state.isImage) return;
   drawSourceFrame();
   const canvas = document.createElement("canvas");
   canvas.width = state.width;
   canvas.height = state.height;
-  renderer.renderInto(canvas, { alphaBackground: alpha, viewModeOverride: 0 });
+  // matte = true → render B&W alpha matte (viewMode 1), matte = false → composite with alpha (viewMode 0)
+  renderer.renderInto(canvas, { alphaBackground: !matte, viewModeOverride: matte ? 1 : 0 });
   const safeName = (state.sourceName || "image").replace(/\.[^.]+$/, "").replace(/[^a-z0-9\-_]+/gi, "_").toLowerCase();
   canvas.toBlob((blob) => {
     if (!blob) return;
-    downloadBlob(blob, `${safeName}${alpha ? "_alpha" : ""}.png`);
+    downloadBlob(blob, `${safeName}${matte ? "_matte" : ""}.png`);
   }, "image/png");
 }
 
@@ -1037,8 +1115,8 @@ el.processButton.addEventListener("click", () => {
 el.busyCancelButton.addEventListener("click", () => { state.abortProcessing = true; });
 el.exportWebmButton.addEventListener("click", () => { closeExportDropdown(); exportVideo({ alpha: false }); });
 el.exportAlphaButton.addEventListener("click", () => { closeExportDropdown(); exportVideo({ alpha: true }); });
-el.exportPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ alpha: false }); });
-el.exportAlphaPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ alpha: true }); });
+el.exportPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ matte: false }); });
+el.exportAlphaPngButton.addEventListener("click", () => { closeExportDropdown(); exportImagePng({ matte: true }); });
 
 el.exportTrigger.addEventListener("click", (e) => {
   e.stopPropagation();

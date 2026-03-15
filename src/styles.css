@@ -31,6 +31,7 @@ html, body {
   flex-direction: column;
   height: 100vh;
   height: 100dvh;
+  user-select: none;
 }
 
 .topbar {
@@ -549,6 +550,61 @@ html, body {
 .slider-mount {
   margin-top: 2px;
   margin-bottom: 10px;
+}
+
+/* ── Threshold Tabs ── */
+
+.threshold-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.threshold-tab {
+  flex: 1;
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-align: center;
+  cursor: pointer;
+  transition: color 100ms, background 100ms, border-color 100ms;
+}
+
+.threshold-tab:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.threshold-tab.active {
+  color: var(--accent);
+  border-color: rgba(114, 255, 159, 0.3);
+  background: rgba(114, 255, 159, 0.08);
+}
+
+.curve-editor-mount[hidden],
+.slider-mount[hidden] {
+  display: none;
+}
+
+/* ── Curve Editor ── */
+
+.curve-editor-mount {
+  width: 100%;
+  height: 140px;
+  margin-bottom: 6px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.curve-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
 }
 
 .noUi-target {

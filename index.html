@@ -34,8 +34,8 @@
             <div class="export-dropdown" id="export-dropdown">
               <button id="export-webm-button" class="export-item" disabled>Color WebM</button>
               <button id="export-alpha-button" class="export-item" disabled>Matte WebM</button>
-              <button id="export-png-button" class="export-item" disabled hidden>Download PNG</button>
-              <button id="export-alpha-png-button" class="export-item" disabled hidden>Download Alpha PNG</button>
+              <button id="export-png-button" class="export-item" disabled hidden>PNG + Alpha</button>
+              <button id="export-alpha-png-button" class="export-item" disabled hidden>B&amp;W Matte PNG</button>
             </div>
           </div>
         </div>
@@ -80,11 +80,16 @@
           <div class="ctrl-section">
             <p class="ctrl-heading">Key Refinement</p>
 
+            <div class="threshold-tabs">
+              <button class="threshold-tab active" data-threshold-mode="simple">Simple</button>
+              <button class="threshold-tab" data-threshold-mode="advanced">Curves</button>
+            </div>
             <div class="ctrl-row">
               <label>Threshold</label>
-              <output id="threshold-output">0.100 &ndash; 0.200</output>
+              <output id="threshold-output">0.000 &ndash; 0.150</output>
             </div>
             <div id="threshold-slider" class="slider-mount"></div>
+            <div id="curve-editor-mount" class="curve-editor-mount" hidden></div>
 
             <div class="ctrl-row">
               <label>Spill Suppression</label>
@@ -109,6 +114,24 @@
               <output id="feather-output">0.00</output>
             </div>
             <div id="feather-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Hue Range</label>
+              <output id="hue-output">80 &ndash; 160</output>
+            </div>
+            <div id="hue-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Sat Floor</label>
+              <output id="sat-output">0.15</output>
+            </div>
+            <div id="sat-slider" class="slider-mount"></div>
+
+            <div class="ctrl-row">
+              <label>Light Range</label>
+              <output id="light-output">0.05 &ndash; 0.95</output>
+            </div>
+            <div id="light-slider" class="slider-mount"></div>
           </div>
 
           <div class="ctrl-section">

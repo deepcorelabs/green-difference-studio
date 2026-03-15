@@ -11,8 +11,7 @@ void main() {
 
 const fragmentShader = `
 uniform sampler2D uTexture;
-uniform float uThresholdLow;
-uniform float uThresholdHigh;
+uniform sampler2D uCurveLUT;
 uniform float uSpillSuppression;
 uniform float uDespillLift;
 uniform float uChoke;
@@ -23,8 +22,37 @@ uniform float uKeyColorCount;
 uniform float uSampleSimilarity;
 uniform vec3 uKeyColors[5];
 uniform vec2 uTexelSize;
+uniform vec2 uHueRange;
+uniform float uSatFloor;
+uniform vec2 uLightRange;
 
 varying vec2 vUv;
+
+vec3 rgbToHsl(vec3 c) {
+  float mx = max(max(c.r, c.g), c.b);
+  float mn = min(min(c.r, c.g), c.b);
+  float l = (mx + mn) * 0.5;
+  if (mx == mn) return vec3(0.0, 0.0, l);
+  float d = mx - mn;
+  float s = l > 0.5 ? d / (2.0 - mx - mn) : d / (mx + mn);
+  float h;
+  if (mx == c.r) h = mod((c.g - c.b) / d, 6.0);
+  else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+  else h = (c.r - c.g) / d + 4.0;
+  return vec3(h * 60.0, s, l);
+}
+
+float computeHslMask(vec3 color) {
+  vec3 hsl = rgbToHsl(color);
+  float hueLo = smoothstep(uHueRange.x - 10.0, uHueRange.x, hsl.x);
+  float hueHi = smoothstep(uHueRange.y, uHueRange.y + 10.0, hsl.x);
+  float hueMask = hueLo * (1.0 - hueHi);
+  float satMask = smoothstep(uSatFloor - 0.05, uSatFloor, hsl.y);
+  float lightLo = smoothstep(uLightRange.x - 0.03, uLightRange.x, hsl.z);
+  float lightHi = smoothstep(uLightRange.y, uLightRange.y + 0.03, hsl.z);
+  float lightMask = lightLo * (1.0 - lightHi);
+  return hueMask * satMask * lightMask;
+}
 
 vec3 rgbToYCbCr(vec3 color) {
   float y = dot(color, vec3(0.299, 0.587, 0.114));
@@ -35,8 +63,10 @@ vec3 rgbToYCbCr(vec3 color) {
 
 float computeAutoKeyAlpha(vec3 color) {
   float reference = max(color.r, color.b);
-  float difference = color.g - reference;
-  return 1.0 - smoothstep(uThresholdLow, uThresholdHigh, difference);
+  float difference = clamp(color.g - reference, 0.0, 1.0);
+  float curveAlpha = texture2D(uCurveLUT, vec2(difference, 0.5)).r;
+  float hslMask = computeHslMask(color);
+  return mix(1.0, curveAlpha, hslMask);
 }
 
 float computeSampledKeyAlpha(vec3 color) {
@@ -162,10 +192,21 @@ export class ChromaKeyRenderer {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
+    // Default LUT: smoothstep(0.0, 0.15) equivalent
+    const defaultLUT = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      const t = i / 255;
+      const s = t < 0 ? 0 : t > 0.15 ? 1 : t / 0.15;
+      defaultLUT[i] = Math.round((1 - s * s * (3 - 2 * s)) * 255);
+    }
+    this.curveLUTTexture = new THREE.DataTexture(defaultLUT, 256, 1, THREE.RedFormat, THREE.UnsignedByteType);
+    this.curveLUTTexture.minFilter = THREE.LinearFilter;
+    this.curveLUTTexture.magFilter = THREE.LinearFilter;
+    this.curveLUTTexture.needsUpdate = true;
+
     this.uniforms = {
       uTexture: { value: null },
-      uThresholdLow: { value: 0.1 },
-      uThresholdHigh: { value: 0.2 },
+      uCurveLUT: { value: this.curveLUTTexture },
       uSpillSuppression: { value: 0.12 },
       uDespillLift: { value: 0.08 },
       uChoke: { value: 0 },
@@ -176,6 +217,9 @@ export class ChromaKeyRenderer {
       uSampleSimilarity: { value: 0.1 },
       uKeyColors: { value: Array.from({ length: 5 }, () => new THREE.Vector3(0, 1, 0)) },
       uTexelSize: { value: new THREE.Vector2(1 / this.size.width, 1 / this.size.height) },
+      uHueRange: { value: new THREE.Vector2(80, 160) },
+      uSatFloor: { value: 0.15 },
+      uLightRange: { value: new THREE.Vector2(0.05, 0.95) },
     };
 
     this.material = new THREE.ShaderMaterial({
@@ -242,9 +286,13 @@ export class ChromaKeyRenderer {
     this.uniforms.uTexelSize.value.set(1 / width, 1 / height);
   }
 
+  updateCurveLUT(lutData) {
+    this.curveLUTTexture.image.data.set(lutData);
+    this.curveLUTTexture.needsUpdate = true;
+  }
+
   updateSettings(settings) {
-    this.uniforms.uThresholdLow.value = settings.thresholdLow;
-    this.uniforms.uThresholdHigh.value = settings.thresholdHigh;
+    if (settings.curveLUT) this.updateCurveLUT(settings.curveLUT);
     this.uniforms.uSpillSuppression.value = settings.spillSuppression;
     this.uniforms.uDespillLift.value = settings.despillLift;
     this.uniforms.uChoke.value = settings.choke ?? 0;
@@ -253,6 +301,10 @@ export class ChromaKeyRenderer {
     this.uniforms.uUseSampledKey.value = settings.useSampledKey ? 1 : 0;
     this.uniforms.uKeyColorCount.value = settings.keyColors?.length ?? 0;
     this.uniforms.uSampleSimilarity.value = settings.sampleSimilarity ?? 0.1;
+
+    if (settings.hueRange) this.uniforms.uHueRange.value.set(settings.hueRange[0], settings.hueRange[1]);
+    this.uniforms.uSatFloor.value = settings.satFloor ?? 0.15;
+    if (settings.lightRange) this.uniforms.uLightRange.value.set(settings.lightRange[0], settings.lightRange[1]);
 
     for (let i = 0; i < 5; i += 1) {
       const color = settings.keyColors?.[i] ?? [0, 1, 0];
