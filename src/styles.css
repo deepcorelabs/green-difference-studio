@@ -429,14 +429,35 @@ html, body {
 
 .sidebar {
   flex-shrink: 0;
-  width: 280px;
+  width: 360px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
   border-left: 1px solid var(--border);
   background: var(--surface);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) rgba(255, 255, 255, 0.04);
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  border: 2px solid rgba(14, 18, 22, 0.95);
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .ctrl-section {
@@ -1263,6 +1284,19 @@ html, body {
   display: flex;
   gap: 3px;
   align-items: center;
+}
+
+.tracker-strength {
+  width: 72px;
+  accent-color: var(--accent);
+}
+
+.tracker-strength-value {
+  min-width: 32px;
+  text-align: right;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  color: #a8e4be;
 }
 
 .tracker-mode-btn {

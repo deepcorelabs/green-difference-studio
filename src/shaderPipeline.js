@@ -28,6 +28,7 @@ uniform vec2 uLightRange;
 uniform float uDespillDepth;
 uniform vec2 uTrackerPositions[4];
 uniform float uTrackerModes[4];
+uniform float uTrackerStrengths[4];
 uniform float uTrackerCount;
 uniform float uTrackerThreshold;
 
@@ -197,61 +198,42 @@ float applyFeather(vec2 uv, float alpha) {
   return total / 9.0;
 }
 
-float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float mode) {
-  // Aspect-correct distance for falloff
-  vec2 aspect = vec2(1.0, uTexelSize.x / uTexelSize.y);
-  float dist = length((pixelUv - trackerUv) * aspect);
+float alphaSimilarity(float a, float b, float strength) {
+  return 1.0 - smoothstep(strength, strength * 2.0, abs(a - b));
+}
 
-  // Distance-based power: closer to center = stronger effect
-  // Normalize: ~0.5 in UV is roughly half the screen
-  float distFalloff = 1.0 - smoothstep(0.0, 0.5, dist);
-  if (distFalloff <= 0.0) return 0.0;
+float localFloodConfidence(vec2 uv, float trackerAlpha, float strength) {
+  vec2 r = uTexelSize * 3.0;
+  float total = 0.0;
+  total += alphaSimilarity(quickKeyAlpha(uv), trackerAlpha, strength) * 1.2;
+  total += alphaSimilarity(quickKeyAlpha(uv + vec2(r.x, 0.0)), trackerAlpha, strength);
+  total += alphaSimilarity(quickKeyAlpha(uv - vec2(r.x, 0.0)), trackerAlpha, strength);
+  total += alphaSimilarity(quickKeyAlpha(uv + vec2(0.0, r.y)), trackerAlpha, strength);
+  total += alphaSimilarity(quickKeyAlpha(uv - vec2(0.0, r.y)), trackerAlpha, strength);
+  total += alphaSimilarity(quickKeyAlpha(uv + r), trackerAlpha, strength) * 0.7;
+  total += alphaSimilarity(quickKeyAlpha(uv - r), trackerAlpha, strength) * 0.7;
+  total += alphaSimilarity(quickKeyAlpha(uv + vec2(-r.x, r.y)), trackerAlpha, strength) * 0.7;
+  total += alphaSimilarity(quickKeyAlpha(uv + vec2(r.x, -r.y)), trackerAlpha, strength) * 0.7;
+  return total / 8.0;
+}
 
-  float steps = 24.0;
+float trackerConnectivity(vec2 pixelUv, vec2 trackerUv, float strength) {
+  float trackerAlpha = quickKeyAlpha(trackerUv);
+  float steps = 10.0;
+  float minConfidence = 1.0;
+  float sumConfidence = 0.0;
 
-  if (mode > 0.5) {
-    // Keep: march from tracker to pixel, accumulate how "opaque" the path is.
-    // Use average alpha along path instead of min — more tolerant of thin edges.
-    float sumAlpha = 0.0;
-    float minAlpha = 1.0;
-    for (float s = 0.0; s <= 24.0; s += 1.0) {
-      float a = quickKeyAlpha(mix(trackerUv, pixelUv, s / steps));
-      sumAlpha += a;
-      minAlpha = min(minAlpha, a);
-    }
-    float avgAlpha = sumAlpha / (steps + 1.0);
-
-    // Blend between avg and min based on threshold — higher threshold = more tolerant
-    float pathScore = mix(minAlpha, avgAlpha, clamp(uTrackerThreshold * 4.0, 0.0, 1.0));
-
-    // Soft threshold on path score
-    float pathPass = smoothstep(0.3 - uTrackerThreshold, 0.3 + uTrackerThreshold, pathScore);
-
-    // Pixel itself must be reasonably opaque (soft edge tolerance)
-    float pixelAlpha = quickKeyAlpha(pixelUv);
-    float pixelPass = smoothstep(0.2 - uTrackerThreshold, 0.5, pixelAlpha);
-
-    return pathPass * pixelPass * distFalloff;
-  } else {
-    // Discard: march from tracker to pixel, check path stays transparent.
-    float sumAlpha = 0.0;
-    float maxAlpha = 0.0;
-    for (float s = 0.0; s <= 24.0; s += 1.0) {
-      float a = quickKeyAlpha(mix(trackerUv, pixelUv, s / steps));
-      sumAlpha += a;
-      maxAlpha = max(maxAlpha, a);
-    }
-    float avgAlpha = sumAlpha / (steps + 1.0);
-
-    float pathScore = mix(maxAlpha, avgAlpha, clamp(uTrackerThreshold * 4.0, 0.0, 1.0));
-
-    float pathPass = 1.0 - smoothstep(0.7 - uTrackerThreshold, 0.7 + uTrackerThreshold, pathScore);
-
-    float pixelAlpha = quickKeyAlpha(pixelUv);
-    float pixelPass = 1.0 - smoothstep(0.5, 0.8 + uTrackerThreshold, pixelAlpha);
-
-    return pathPass * pixelPass * distFalloff;
+  for (float s = 0.0; s <= 10.0; s += 1.0) {
+    vec2 sampleUv = mix(trackerUv, pixelUv, s / steps);
+    float conf = localFloodConfidence(sampleUv, trackerAlpha, strength);
+    minConfidence = min(minConfidence, conf);
+    sumConfidence += conf;
   }
+
+  float pixelConfidence = localFloodConfidence(pixelUv, trackerAlpha, strength);
+  float avgConfidence = sumConfidence / (steps + 1.0);
+  float pathConfidence = mix(minConfidence, avgConfidence, 0.7);
+  return pathConfidence * pixelConfidence;
 }
 
 void main() {
@@ -266,8 +248,9 @@ void main() {
   for (int i = 0; i < 4; i++) {
     if (float(i) >= uTrackerCount) break;
     float mode = uTrackerModes[i];
+    float strength = max(uTrackerStrengths[i], 0.001);
     if (abs(mode) < 0.5) continue;
-    float conn = trackerConnectivity(vUv, uTrackerPositions[i], mode);
+    float conn = trackerConnectivity(vUv, uTrackerPositions[i], strength);
     if (mode > 0.5) {
       alpha = mix(alpha, 1.0, conn);
     } else {
@@ -360,6 +343,7 @@ export class ChromaKeyRenderer {
       uDespillDepth: { value: 0 },
       uTrackerPositions: { value: Array.from({ length: 4 }, () => new THREE.Vector2(0, 0)) },
       uTrackerModes: { value: new Float32Array(4) },
+      uTrackerStrengths: { value: new Float32Array([0.15, 0.15, 0.15, 0.15]) },
       uTrackerCount: { value: 0 },
       uTrackerThreshold: { value: 0.15 },
       uHueRange: { value: new THREE.Vector2(80, 160) },
@@ -427,9 +411,11 @@ export class ChromaKeyRenderer {
       if (i < count) {
         this.uniforms.uTrackerPositions.value[i].set(trackers[i].x, trackers[i].y);
         this.uniforms.uTrackerModes.value[i] = trackers[i].mode === "keep" ? 1 : trackers[i].mode === "discard" ? -1 : 0;
+        this.uniforms.uTrackerStrengths.value[i] = trackers[i].strength ?? 0.15;
       } else {
         this.uniforms.uTrackerPositions.value[i].set(0, 0);
         this.uniforms.uTrackerModes.value[i] = 0;
+        this.uniforms.uTrackerStrengths.value[i] = 0.15;
       }
     }
   }
