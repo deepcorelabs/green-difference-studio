@@ -2,8 +2,9 @@
 
 A browser-based chroma key (green screen) video processor with real-time preview, GPU-accelerated rendering, and WebM export with alpha transparency.
 
-<!-- Replace with an actual screenshot or screen recording -->
-![Demo](https://deepcorelabs.com/tools/green-difference-studio/)
+[![Demo Video](https://img.youtube.com/vi/FnODFxK4WuE/maxresdefault.jpg)](https://youtu.be/FnODFxK4WuE)
+
+[**View Demo Online**](https://deepcorelabs.com/tools/green-difference-studio/)
 
 ## Features
 
@@ -135,8 +136,9 @@ Want to help improve this tool? Here's the current roadmap — PRs and ideas wel
 1. **Masks** — Brush, primitive shape, polygonal, and lasso mask tools that act as alpha or despill keepers/blockers, with feathered/blurred edges (garbage matte / luminance mask support)
 2. **Automatic motion tracking** — Add to the current manual trackers real frame-by-frame point tracking (e.g. Lucas-Kanade or correlation-based)
 3. **Image sequence export** — Export as PNG+Alpha sequence or JPG matte sequence, not just WebM
-4. **Undo/Redo** — Full history stack for all parameter changes, tracker edits, and mask operations
-5. **Worker-based flood fill** — Offload the CPU-heavy tracker flood fill and distance field computation to Web Workers for faster processing on multi-core machines
+4. **Improved despill & spill suppression** — Smarter color recovery with edge-aware despill, better handling of fine detail like hair and translucent materials
+5. **Undo/Redo** — Full history stack for all parameter changes, tracker edits, and mask operations
+6. **Worker-based flood fill** — Offload the CPU-heavy tracker flood fill and distance field computation to Web Workers for faster processing on multi-core machines
 6. **Batch processing** — Queue multiple videos and process them sequentially with saved presets
 7. **CorridorKey in the browser** — one can dream... 😏
 
